@@ -8,6 +8,13 @@
           "$msg": {
             ".validate": "!data.exists() || (newData.child('from').val() === data.child('from').val() && newData.child('text').val() === data.child('text').val())"
           }
+        },
+        "photos": {
+          "$photo": {
+            "data": {
+              ".validate": "newData.isString() && newData.val().length <= 400000"
+            }
+          }
         }
       }
     }

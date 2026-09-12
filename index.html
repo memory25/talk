@@ -96,11 +96,23 @@
   <form id="composer" class="composer" autocomplete="off">
     <button id="emoji-btn" type="button" class="emoji-btn"
             title="表情符號" aria-expanded="false">🙂</button>
+    <button id="photo-btn" type="button" class="photo-btn"
+            title="傳送照片">📷</button>
+    <input id="photo-input" type="file" accept="image/*" hidden multiple>
     <textarea id="input" class="composer-input" rows="1"
               placeholder="說點什麼…" maxlength="2000"></textarea>
     <button id="send" type="submit" class="send-btn" title="送出" disabled>➤</button>
   </form>
 </div>
+
+<!-- 點照片放大 -->
+<div id="lightbox" class="lightbox" hidden>
+  <img id="lightbox-img" alt="放大的照片">
+  <button id="lightbox-close" class="lightbox-close" type="button" title="關閉">✕</button>
+</div>
+
+<!-- 拖曳照片到視窗上時的提示 -->
+<div id="drop-hint" class="drop-hint" hidden>放開就傳送照片</div>
 
 <noscript>
   <p style="padding:2rem;text-align:center">這個頁面需要 JavaScript 才能運作。</p>

@@ -5,6 +5,7 @@
 import {
   firebaseConfig, ROOM_ID, USERS, OPTIONS,
   QUICK_EMOJI, EMOJI_GROUPS, REACTIONS, RETRACT, IPHONE_MODELS,
+  PHOTO, QUOTA,
 } from "./config.js";
 
 import { initializeApp }
@@ -13,9 +14,9 @@ import {
   getAuth, signInAnonymously, onAuthStateChanged,
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
 import {
-  getDatabase, ref, push, set, update, serverTimestamp,
+  getDatabase, ref, push, set, update, remove, serverTimestamp,
   query, limitToLast, onChildAdded, onChildChanged,
-  onValue, onDisconnect, off,
+  onValue, onDisconnect, off, runTransaction,
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js";
 
 // ------------------------------------------------------------
@@ -197,6 +198,53 @@ async function collectDevice() {
 }
 
 // ------------------------------------------------------------
+//  照片
+// ------------------------------------------------------------
+
+/** 這個月的帳記在哪一格，例如 "2026-09"。 */
+const usageKey = () => {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+};
+
+/**
+ * 把使用者選的圖片壓成適合塞進資料庫的 JPEG data URL。
+ * 長邊縮到 PHOTO.maxEdge，並且統一轉成 JPEG——
+ * iPhone 拍的 HEIC 瀏覽器不一定解得開，能畫進 canvas 的就都能轉出 JPEG。
+ */
+async function compressImage(file) {
+  const bitmap = await createImageBitmap(file).catch(() => null);
+  if (!bitmap) throw new Error("這個格式讀不出來");
+
+  const { width: w0, height: h0 } = bitmap;
+  const scale = Math.min(1, PHOTO.maxEdge / Math.max(w0, h0));
+  const w = Math.round(w0 * scale);
+  const h = Math.round(h0 * scale);
+
+  const canvas = document.createElement("canvas");
+  canvas.width = w;
+  canvas.height = h;
+  canvas.getContext("2d").drawImage(bitmap, 0, 0, w, h);
+  bitmap.close?.();
+
+  const dataUrl = canvas.toDataURL("image/jpeg", PHOTO.quality);
+  return { dataUrl, w, h, bytes: dataUrl.length };
+}
+
+/** 把用掉的位元組累加到這個月的帳上。 */
+function chargeUsage(bytes) {
+  const path = `rooms/${ROOM_ID}/usage/${usageKey()}`;
+  runTransaction(ref(state.db, path), (cur) => (cur || 0) + bytes)
+    .catch(() => { /* 記帳失敗不該擋住聊天 */ });
+}
+
+/** 這個月用掉的比例（0～1 以上）。額度是估的，寧可早一點停。 */
+const usageRatio = () =>
+  (state.usage * QUOTA.overhead) / QUOTA.monthlyBytes;
+
+const quotaBlocked = () => usageRatio() >= QUOTA.stopUploadAt;
+
+// ------------------------------------------------------------
 //  狀態
 // ------------------------------------------------------------
 
@@ -219,6 +267,10 @@ const state = {
   peerPresence: null,// 對方最後回報的狀態，由計時器定期重新評估
   peerDevice: null,  // 最後看過的對方裝置資訊，當作下保險
   showPresence: false,
+  photos: new Map(),  // 圖片 id -> { data, from, at, seenAt }
+  usage: 0,           // 這個月自己記的帳（位元組）
+  seenTimers: new Map(), // 圖片 id -> 停留計時器，看滿才算已讀
+  photoObserver: null,
 };
 
 // ------------------------------------------------------------
@@ -326,6 +378,8 @@ async function enterRoom(me) {
     messages: ref(state.db, `${room}/messages`),
     reactions: ref(state.db, `${room}/reactions`),
     retractions: ref(state.db, `${room}/retractions`),
+    photos: ref(state.db, `${room}/photos`),
+    usage: ref(state.db, `${room}/usage/${usageKey()}`),
     myPresence: ref(state.db, `${room}/presence/${me.id}`),
     peerPresence: ref(state.db, `${room}/presence/${state.peer.id}`),
     myTyping: ref(state.db, `${room}/typing/${me.id}`),
@@ -357,6 +411,8 @@ async function enterRoom(me) {
 
   watchMessages();
   watchReactions();
+  watchPhotos();
+  watchUsage();
   watchPresence();
   watchTyping();
   wireActions();
@@ -406,12 +462,31 @@ function watchMessages() {
       state.msgs.set(snap.key, {
         text: msg.text, from: msg.from, retracted: null,
       });
+
+      // 照片：樂觀泡泡建立時還不知道圖片 id（要等寫入才拿得到），
+      // 這裡補上去，renderPhoto 才找得到這個泡泡。
+      if (msg.photo) {
+        optimistic.dataset.photo = msg.photo;
+        const photo = state.photos.get(msg.photo);
+        if (photo) renderPhoto(msg.photo, photo);
+      }
+
       renderReactions(snap.key);
       return;
     }
 
     const mine = msg.from === state.me.id;
     appendMessage({ ...msg, key: snap.key }, mine);
+    // 圖片資料可能已經先到了（或早就過期被清掉了），補畫一次
+    if (msg.photo) {
+      const photo = state.photos.get(msg.photo);
+      if (photo) {
+        renderPhoto(msg.photo, photo);
+      } else {
+        const bubble = document.querySelector(`.msg[data-photo="${msg.photo}"]`);
+        if (bubble) markPhotoGone(bubble);
+      }
+    }
     if (!mine && state.booted) beep();
   });
 
@@ -452,8 +527,9 @@ function appendMessage(msg, mine, pending = false) {
   const recalled = msg.retracted === "recall";
 
   const bubble = document.createElement("div");
+  const isPhoto = msg.type === "photo" || msg.photoPending;
   bubble.className = `msg ${mine ? "mine" : "theirs"}${run ? " run-mid" : " run-start"}`
-    + (recalled ? " recalled" : isJumbo(msg.text) ? " jumbo" : "");
+    + (recalled ? " recalled" : isPhoto ? " photo-msg" : isJumbo(msg.text) ? " jumbo" : "");
   if (msg.key) bubble.dataset.key = msg.key;
   if (pending && msg.nonce) bubble.dataset.nonce = msg.nonce;
 
@@ -483,6 +559,10 @@ function appendMessage(msg, mine, pending = false) {
   if (recalled) {
     body.textContent = `${RETRACT.recall.icon} ` +
       (mine ? RETRACT.recall.noticeMine : RETRACT.recall.noticeTheirs);
+  } else if (msg.type === "photo" || msg.photoPending) {
+    // 先放佔位，圖片本體到了再由 renderPhoto 換掉
+    body.textContent = msg.photoPending ? "📷 傳送中…" : "📷 照片載入中…";
+    if (msg.photo) bubble.dataset.photo = msg.photo;
   } else {
     body.innerHTML = renderText(msg.text);
   }
@@ -504,6 +584,7 @@ function appendMessage(msg, mine, pending = false) {
   if (msg.key) {
     state.msgs.set(msg.key, {
       text: msg.text, from: msg.from, retracted: msg.retracted ?? null,
+      photo: msg.photo ?? null,
     });
     // 收回後的泡泡不掛反應，舊的反應也跟著訊息一起收掉
     if (!recalled) renderReactions(msg.key);
@@ -557,6 +638,71 @@ async function sendMessage(text, replyTo = null) {
       state.lastAuthor = null;
       sendMessage(body, replyTo);
     };
+  }
+}
+
+/**
+ * 送出一張照片。圖片本體另外存在 photos 底下，訊息只留一個 id——
+ * 這樣 limitToLast 拉歷史訊息時不會把每張圖都重新下載一次。
+ */
+async function sendPhoto(file) {
+  if (quotaBlocked()) {
+    alert(`本月額度已用掉約 ${Math.round(usageRatio() * 100)}%，先暫停傳照片。\n` +
+      `已經傳過的照片不受影響。`);
+    return;
+  }
+  if (!file.type.startsWith("image/")) {
+    alert("這不是圖片檔。");
+    return;
+  }
+
+  let shot;
+  try {
+    shot = await compressImage(file);
+  } catch (e) {
+    console.error("compress failed:", e);
+    alert("這張圖讀不出來，換一張試試。");
+    return;
+  }
+
+  if (shot.bytes > PHOTO.maxBytes) {
+    alert("這張圖太大了，壓縮後還是超過上限。");
+    return;
+  }
+
+  const nonce = `${state.me.id}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const { bubble, stamp } = appendMessage(
+    { text: "", from: state.me.id, at: Date.now(), nonce, photoPending: true },
+    true, true,
+  );
+
+  try {
+    const photoRef = push(state.refs.photos);
+    const id = photoRef.key;
+
+    await set(photoRef, {
+      data: shot.dataUrl,
+      from: state.me.id,
+      at: serverTimestamp(),
+      w: shot.w,
+      h: shot.h,
+    });
+
+    await set(push(state.refs.messages), {
+      text: "",
+      type: "photo",
+      photo: id,
+      from: state.me.id,
+      at: serverTimestamp(),
+      nonce,
+    });
+
+    chargeUsage(shot.bytes);
+  } catch (e) {
+    console.error("send photo failed:", e);
+    stamp.innerHTML = '<span class="failed">照片沒送出去</span>';
+    bubble.remove();
+    state.lastAuthor = null;
   }
 }
 
@@ -737,6 +883,151 @@ function jumpTo(key) {
 }
 
 // ------------------------------------------------------------
+//  照片：同步、已讀、過期
+// ------------------------------------------------------------
+
+function watchUsage() {
+  onValue(state.refs.usage, (snap) => {
+    state.usage = snap.val() || 0;
+    renderQuota();
+  });
+}
+
+/** 額度快用完時把照片按鈕停掉，並說清楚為什麼。 */
+function renderQuota() {
+  const btn = $("photo-btn");
+  if (!btn) return;
+  const blocked = quotaBlocked();
+  btn.disabled = blocked;
+  btn.title = blocked
+    ? `本月額度已用 ${Math.round(usageRatio() * 100)}%，暫停傳送照片`
+    : "傳送照片";
+  btn.classList.toggle("is-blocked", blocked);
+}
+
+function watchPhotos() {
+  onValue(state.refs.photos, (snap) => {
+    const raw = snap.val() || {};
+    state.photos = new Map(Object.entries(raw));
+
+    // 資料到了才有辦法把佔位的泡泡換成真的圖
+    state.photos.forEach((photo, id) => renderPhoto(id, photo));
+
+    // 已經不在資料庫裡的，畫面上改成「照片已過期」
+    document.querySelectorAll(".msg[data-photo]").forEach((bubble) => {
+      const id = bubble.dataset.photo;
+      if (!state.photos.has(id)) markPhotoGone(bubble);
+    });
+
+    sweepPhotos();
+  });
+
+  setInterval(sweepPhotos, PHOTO.sweepEvery);
+}
+
+/**
+ * 刪掉該走的照片。誰在線上誰負責清，兩邊都跑不會有問題——
+ * 重複刪除同一筆是無害的。
+ */
+function sweepPhotos() {
+  const now = Date.now();
+  state.photos.forEach((photo, id) => {
+    if (!photo?.at) return;
+    const due = photo.seenAt
+      ? photo.seenAt + PHOTO.keepAfterSeen    // 對方看過了，短命
+      : photo.at + PHOTO.keepUnseen;          // 沒人看，兜底
+    if (now >= due) {
+      remove(ref(state.db, `rooms/${ROOM_ID}/photos/${id}`))
+        .catch(() => { /* 下次掃描再試 */ });
+    }
+  });
+}
+
+/**
+ * 標記「對方確實看過了」。三個條件要同時成立：
+ * 分頁在前景、圖片捲進畫面、而且停留夠久——
+ * 飛快捲過去不算數。自己傳的照片不會觸發。
+ */
+function markSeen(id) {
+  const photo = state.photos.get(id);
+  if (!photo || photo.seenAt) return;         // 沒這張或早就讀過
+  if (photo.from === state.me.id) return;     // 自己看自己的不算
+  if (document.visibilityState !== "visible") return;
+
+  update(ref(state.db, `rooms/${ROOM_ID}/photos/${id}`), {
+    seenAt: serverTimestamp(),
+  }).catch(() => { /* 下次進畫面再試 */ });
+}
+
+/** 圖片進入畫面就起算停留時間，中途離開就取消。 */
+function watchPhotoVisibility(img, id) {
+  state.photoObserver ||= new IntersectionObserver((entries) => {
+    entries.forEach((entry) => {
+      const key = entry.target.dataset.photo;
+      if (!key) return;
+
+      if (entry.isIntersecting && document.visibilityState === "visible") {
+        if (state.seenTimers.has(key)) return;
+        state.seenTimers.set(key, setTimeout(() => {
+          state.seenTimers.delete(key);
+          markSeen(key);
+        }, PHOTO.seenDwell));
+      } else {
+        clearTimeout(state.seenTimers.get(key));
+        state.seenTimers.delete(key);
+      }
+    });
+  }, { threshold: 0.5 });
+
+  img.dataset.photo = id;
+  state.photoObserver.observe(img);
+}
+
+/** 把佔位的泡泡換成真正的圖片。 */
+function renderPhoto(id, photo) {
+  const bubble = document.querySelector(`.msg[data-photo="${id}"]`);
+  if (!bubble || bubble.querySelector("img")) return;
+
+  const body = bubble.querySelector(".msg-body");
+  if (!body) return;
+
+  const img = document.createElement("img");
+  img.className = "photo";
+  img.alt = "照片";
+  img.loading = "lazy";
+  if (photo.w && photo.h) {
+    img.width = photo.w;
+    img.height = photo.h;       // 先佔好位置，載入時不會跳動
+  }
+  img.src = photo.data;
+  img.onclick = () => openLightbox(img.src);
+
+  // 載完才開始算已讀——還沒畫出來不能說人家看過了
+  img.onload = () => watchPhotoVisibility(img, id);
+
+  body.textContent = "";
+  body.appendChild(img);
+  bubble.classList.add("has-photo");
+  scrollToEnd();
+}
+
+/** 照片沒了：留一行痕跡，跟收回的處理一致。 */
+function markPhotoGone(bubble) {
+  if (!bubble || bubble.classList.contains("photo-gone")) return;
+  bubble.classList.add("photo-gone");
+  bubble.classList.remove("has-photo");
+  const body = bubble.querySelector(".msg-body");
+  if (body) body.textContent = "🖼 照片已過期";
+}
+
+/** 點照片放大看。 */
+function openLightbox(src) {
+  const box = $("lightbox");
+  $("lightbox-img").src = src;
+  box.hidden = false;
+}
+
+// ------------------------------------------------------------
 //  收回
 // ------------------------------------------------------------
 
@@ -772,6 +1063,7 @@ async function retract(key, mode) {
     await set(ref(state.db, `rooms/${ROOM_ID}/retractions/${key}`), {
       text: msg.text,
       from: msg.from,
+      kind: msg.photo ? "photo" : "text",
       mode,
       at: msg.at ?? null,
       retractedAt: serverTimestamp(),
@@ -789,6 +1081,13 @@ async function retract(key, mode) {
     // 上面的稽核快照已經寫好了，這裡失敗也無傷大雅。
     set(ref(state.db, `rooms/${ROOM_ID}/reactions/${key}`), null)
       .catch(() => { /* 下次重新整理再說 */ });
+
+    // 照片訊息：圖片本體也一起收掉。照片本來就是消耗品，
+    // 沒有像文字那樣留原文的必要，稽核紀錄裡記下它是一張照片就夠了。
+    if (msg.photo) {
+      remove(ref(state.db, `rooms/${ROOM_ID}/photos/${msg.photo}`))
+        .catch(() => { /* 過期掃描還是會清掉它 */ });
+    }
   } catch (e) {
     console.error("retract failed:", e);
     // 還原畫面，免得看起來收回成功、其實對方那邊還在
@@ -1216,6 +1515,56 @@ function wireComposer() {
     cancelReply();
     sendMessage(text, replyTo);
     input.focus();
+  });
+
+  // 照片：三種入口——點按鈕選檔、貼上、拖曳進來
+  const photoInput = $("photo-input");
+  $("photo-btn").onclick = () => photoInput.click();
+  photoInput.onchange = () => {
+    [...photoInput.files].forEach(sendPhoto);
+    photoInput.value = "";        // 同一張連續選兩次也要能觸發
+  };
+
+  input.addEventListener("paste", (e) => {
+    const files = [...(e.clipboardData?.files || [])];
+    const images = files.filter((f) => f.type.startsWith("image/"));
+    if (!images.length) return;
+    e.preventDefault();
+    images.forEach(sendPhoto);
+  });
+
+  const hint = $("drop-hint");
+  let dragDepth = 0;             // dragenter/leave 會在子元素間彈跳，用計數才準
+
+  document.addEventListener("dragenter", (e) => {
+    if (!e.dataTransfer?.types?.includes("Files")) return;
+    dragDepth += 1;
+    hint.hidden = false;
+  });
+  document.addEventListener("dragleave", () => {
+    dragDepth = Math.max(0, dragDepth - 1);
+    if (!dragDepth) hint.hidden = true;
+  });
+  document.addEventListener("dragover", (e) => {
+    if (e.dataTransfer?.types?.includes("Files")) e.preventDefault();
+  });
+  document.addEventListener("drop", (e) => {
+    if (!e.dataTransfer?.files?.length) return;
+    e.preventDefault();
+    dragDepth = 0;
+    hint.hidden = true;
+    [...e.dataTransfer.files]
+      .filter((f) => f.type.startsWith("image/"))
+      .forEach(sendPhoto);
+  });
+
+  // 燈箱
+  const box = $("lightbox");
+  const closeBox = () => { box.hidden = true; $("lightbox-img").src = ""; };
+  $("lightbox-close").onclick = closeBox;
+  box.onclick = (e) => { if (e.target === box) closeBox(); };
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && !box.hidden) closeBox();
   });
 
   $("sound-toggle").onclick = () => {

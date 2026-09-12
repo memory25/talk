@@ -15,6 +15,7 @@ No bundler, no `npm install`, no dependencies to keep up to date.
 - Real-time messaging with optimistic rendering and retry on failure
 - Reply to a specific message, with a quoted snapshot of the original
 - Retract your own messages two ways, with the original text kept in the database
+- Send photos that expire five minutes after the other person has actually seen them
 - Emoji reactions, plus a quick-pick row and a categorised picker
 - Typing indicator and a sound on incoming messages
 - Message text is escaped before rendering; URLs are linkified
@@ -85,6 +86,47 @@ when a new size appears. An unrecognised size simply omits the field.
 Battery is only available on Chrome and Edge — Firefox and Safari removed the
 API — and the approximate location comes from a free IP service that may be
 blocked or rate-limited. Either one is skipped when unavailable.
+
+## Photos
+
+Photos are deliberately short-lived. They are stored as compressed JPEG data
+in the database itself — no third-party image host is involved — so the same
+rules that protect the messages protect them, and only the two people in the
+room can load them.
+
+Send one by clicking the camera button, pasting from the clipboard, or dragging
+a file onto the window. The image is resized and re-encoded in the browser
+before it is uploaded, which also sidesteps HEIC: anything the browser can draw
+comes back out as JPEG.
+
+**Expiry** is driven by whether the photo was actually seen, not by a fixed
+timer from when it was sent:
+
+- Once the other person has genuinely seen it, it is deleted five minutes later.
+- If nobody ever sees it, it is deleted after 24 hours as a backstop.
+- Either way the message stays in the conversation, showing a dim
+  "photo expired" line in place of the image.
+
+"Seen" requires three things at once — the other person's tab is in the
+foreground, the image has scrolled into view, and it has stayed there for a
+second and a half. Scrolling straight past does not count, and your own photos
+never mark themselves as seen. The sweep that performs the deletion runs in
+whichever client is online; both running it is harmless.
+
+The photo body lives under `rooms/<room>/photos/<id>` and the message only
+carries that id, so pulling message history does not re-download every image.
+
+## Quota
+
+Firebase only reports real usage in its console, not to clients, so the app
+keeps its own tally: every photo upload adds its byte count to a per-month
+counter at `rooms/<room>/usage/<YYYY-MM>`. When the estimate crosses 75% of the
+free tier's 10 GB, the camera button is disabled and says why.
+
+Only photos are counted — text and presence traffic are negligible next to a
+265 KB image — and the total is inflated by 15% as a margin, so the cutoff lands
+around 6.5 GB of real use. Photos already sent keep working; only new uploads
+stop. Both numbers are in [config.js](config.js) under `QUOTA`.
 
 ## Retracting messages
 
