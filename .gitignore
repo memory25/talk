@@ -1,0 +1,13 @@
+# 系統
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# 編輯器
+.vscode/
+.idea/
+*.swp
+
+# Firebase CLI
+.firebase/
+firebase-debug*.log

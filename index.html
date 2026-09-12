@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#12131a">
+<title>talk</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='14' font-size='14'>💬</text></svg>">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<!-- ========== 進場畫面 ========== -->
+<main id="gate" class="gate">
+  <div class="gate-card">
+    <h1 class="gate-title">talk</h1>
+
+    <form id="gate-form" autocomplete="off">
+      <label class="field">
+        <input id="passphrase" type="text" class="input input-key"
+               placeholder="你的角色" autocomplete="off"
+               autocapitalize="none" spellcheck="false"
+               maxlength="16" aria-label="輸入你的角色" required>
+      </label>
+
+      <p id="gate-error" class="gate-error" role="alert" hidden></p>
+
+      <button id="gate-submit" type="submit" class="btn-primary">進入</button>
+      <label class="remember">
+        <input id="remember" type="checkbox" checked>
+        <span>這台裝置記住我</span>
+      </label>
+    </form>
+  </div>
+</main>
+
+<!-- ========== 聊天畫面 ========== -->
+<div id="chat" class="chat" hidden>
+  <header class="bar">
+    <div class="peer">
+      <span id="peer-dot" class="dot" aria-hidden="true"></span>
+      <div class="peer-text">
+        <strong id="peer-name">—</strong>
+        <small id="peer-state">連線中…</small>
+      </div>
+    </div>
+    <div class="bar-actions">
+      <button id="sound-toggle" class="icon-btn" title="提示音" aria-pressed="true">🔔</button>
+      <button id="leave" class="icon-btn" title="離開">⏻</button>
+    </div>
+  </header>
+
+  <div id="stream" class="stream" role="log" aria-live="polite">
+    <p id="stream-empty" class="stream-empty">還沒有任何訊息。說點什麼吧。</p>
+  </div>
+
+  <div id="typing" class="typing" hidden>
+    <span class="typing-dots"><i></i><i></i><i></i></span>
+    <span id="typing-text"></span>
+  </div>
+
+  <!-- 長按 / 滑過訊息時出現的動作選單 -->
+  <div id="actions" class="actions" hidden role="menu" aria-label="訊息動作">
+    <div id="reaction-row" class="reaction-row"></div>
+    <button id="act-reply" class="act-btn" type="button" role="menuitem">
+      <span aria-hidden="true">↩</span> 回覆
+    </button>
+  </div>
+
+  <!-- 正在回覆誰 -->
+  <div id="reply-bar" class="reply-bar" hidden>
+    <div class="reply-bar-body">
+      <span id="reply-who" class="reply-who"></span>
+      <span id="reply-text" class="reply-text"></span>
+    </div>
+    <button id="reply-cancel" class="reply-cancel" type="button" title="取消回覆">✕</button>
+  </div>
+
+  <div id="quick" class="quick" aria-label="常用表情"></div>
+
+  <div id="emoji-panel" class="emoji-panel" hidden>
+    <div id="emoji-tabs" class="emoji-tabs" role="tablist"></div>
+    <div id="emoji-grid" class="emoji-grid" role="group" aria-label="表情符號"></div>
+  </div>
+
+  <form id="composer" class="composer" autocomplete="off">
+    <button id="emoji-btn" type="button" class="emoji-btn"
+            title="表情符號" aria-expanded="false">🙂</button>
+    <textarea id="input" class="composer-input" rows="1"
+              placeholder="說點什麼…" maxlength="2000"></textarea>
+    <button id="send" type="submit" class="send-btn" title="送出" disabled>➤</button>
+  </form>
+</div>
+
+<noscript>
+  <p style="padding:2rem;text-align:center">這個頁面需要 JavaScript 才能運作。</p>
+</noscript>
+
+<script type="module" src="app.js"></script>
+</body>
+</html>
