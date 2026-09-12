@@ -109,6 +109,76 @@ const beep = (() => {
   };
 })();
 
+/**
+ * 短暫浮現的提示，取代 alert——不必按確定，也不會打斷手上的動作。
+ * tone "bad" 會用警示色，其餘是一般訊息。
+ */
+function toast(message, tone = "info") {
+  const host = $("toasts");
+  if (!host) return;
+
+  const el = document.createElement("div");
+  el.className = `toast toast-${tone}`;
+  el.textContent = message;
+  host.appendChild(el);
+
+  // 動畫跑完才真的移除，不然會看到它硬生生消失
+  const kill = () => {
+    el.classList.add("is-leaving");
+    el.addEventListener("animationend", () => el.remove(), { once: true });
+    // 萬一動畫沒觸發（減少動態偏好設定），保底移除
+    setTimeout(() => el.remove(), 400);
+  };
+  const timer = setTimeout(kill, 3200);
+  el.onclick = () => { clearTimeout(timer); kill(); };
+}
+
+/**
+ * 取代 confirm 的自訂確認框。回傳 Promise<boolean>，
+ * 所以呼叫端只要加個 await，其餘邏輯照舊。
+ */
+function ask({ title, body = "", yes = "確定", no = "取消", danger = false }) {
+  return new Promise((resolve) => {
+    const box = $("ask");
+    const yesBtn = $("ask-yes");
+    const noBtn = $("ask-no");
+
+    $("ask-title").textContent = title;
+    $("ask-body").textContent = body;
+    $("ask-body").hidden = !body;
+    yesBtn.textContent = yes;
+    noBtn.textContent = no;
+    yesBtn.classList.toggle("is-danger", danger);
+
+    const close = (answer) => {
+      box.hidden = true;
+      yesBtn.onclick = noBtn.onclick = box.onclick = null;
+      document.removeEventListener("keydown", onKey, true);
+      resolve(answer);
+    };
+
+    // 確認框開著時，Escape / Enter 只屬於它——
+    // 不攔的話同一個按鍵還會去關選單、取消回覆或送出訊息。
+    const onKey = (e) => {
+      if (e.key !== "Escape" && e.key !== "Enter") return;
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      close(e.key === "Enter");
+    };
+
+    yesBtn.onclick = () => close(true);
+    noBtn.onclick = () => close(false);
+    box.onclick = (e) => { if (e.target === box) close(false); };
+    // capture 階段：其他 keydown listener 都掛在 document 上，
+    // 這裡要先攔到才有辦法擋下它們。
+    document.addEventListener("keydown", onKey, true);
+
+    box.hidden = false;
+    // 預設落在「取消」上，避免連按 Enter 就誤觸破壞性動作
+    noBtn.focus();
+  });
+}
+
 function fatal(message) {
   $("gate-error").textContent = message;
   $("gate-error").hidden = false;
@@ -647,12 +717,11 @@ async function sendMessage(text, replyTo = null) {
  */
 async function sendPhoto(file) {
   if (quotaBlocked()) {
-    alert(`本月額度已用掉約 ${Math.round(usageRatio() * 100)}%，先暫停傳照片。\n` +
-      `已經傳過的照片不受影響。`);
+    toast(`本月額度已用約 ${Math.round(usageRatio() * 100)}%，暫停傳照片`, "bad");
     return;
   }
   if (!file.type.startsWith("image/")) {
-    alert("這不是圖片檔。");
+    toast("這不是圖片檔", "bad");
     return;
   }
 
@@ -661,12 +730,12 @@ async function sendPhoto(file) {
     shot = await compressImage(file);
   } catch (e) {
     console.error("compress failed:", e);
-    alert("這張圖讀不出來，換一張試試。");
+    toast("這張圖讀不出來，換一張試試", "bad");
     return;
   }
 
   if (shot.bytes > PHOTO.maxBytes) {
-    alert("這張圖太大了，壓縮後還是超過上限。");
+    toast("這張圖太大了，壓縮後還是超過上限", "bad");
     return;
   }
 
@@ -1048,8 +1117,16 @@ async function retract(key, mode) {
 
   const conf = mode === "remove" ? RETRACT.remove : RETRACT.recall;
   if (OPTIONS.confirmRetract) {
-    const peek = msg.text.length > 40 ? `${msg.text.slice(0, 40)}…` : msg.text;
-    if (!confirm(`${conf.label}這則訊息？\n\n${peek}`)) return;
+    const peek = msg.photo
+      ? "這張照片"
+      : msg.text.length > 40 ? `${msg.text.slice(0, 40)}…` : msg.text;
+    const ok = await ask({
+      title: `${conf.label}這則訊息？`,
+      body: peek,
+      yes: conf.label,
+      danger: true,
+    });
+    if (!ok) return;
   }
 
   // 先動畫面，對方那邊由 onChildChanged 推過去。
@@ -1092,7 +1169,7 @@ async function retract(key, mode) {
     console.error("retract failed:", e);
     // 還原畫面，免得看起來收回成功、其實對方那邊還在
     state.msgs.set(key, { ...msg, retracted: before });
-    alert("收回失敗，訊息還在。檢查一下網路再試。");
+    toast("收回失敗，訊息還在", "bad");
     location.reload();
   }
 }
@@ -1574,8 +1651,14 @@ function wireComposer() {
     if (state.sound) beep();
   };
 
-  $("leave").onclick = () => {
-    if (!confirm("離開並忘記這台裝置上的身分？")) return;
+  $("leave").onclick = async () => {
+    const ok = await ask({
+      title: "離開這個聊天室？",
+      body: "這台裝置會忘記你的身分，下次要重新輸入。訊息不會不見。",
+      yes: "離開",
+      danger: true,
+    });
+    if (!ok) return;
     localStorage.removeItem(STORE_KEY);
     update(state.refs.myPresence, { online: false, active: false, at: serverTimestamp() })
       .finally(() => location.reload());

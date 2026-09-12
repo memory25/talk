@@ -19,6 +19,7 @@ No bundler, no `npm install`, no dependencies to keep up to date.
 - Emoji reactions, plus a quick-pick row and a categorised picker
 - Typing indicator and a sound on incoming messages
 - Message text is escaped before rendering; URLs are linkified
+- Confirmations and notices are in-page, not browser dialogs
 
 ## Running locally
 

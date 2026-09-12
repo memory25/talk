@@ -868,6 +868,149 @@ body.pressing .msg {
 
 .lightbox-close:hover { background: rgba(255, 255, 255, .24); }
 
+/* ---------- 浮動提示 ---------- */
+
+.toasts {
+  position: fixed;
+  left: 50%;
+  bottom: 92px;
+  z-index: 70;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  pointer-events: none;
+  width: max-content;
+  max-width: min(92vw, 420px);
+}
+
+.toast {
+  pointer-events: auto;
+  padding: 10px 16px;
+  border-radius: 11px;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  color: var(--text);
+  font-size: 13.5px;
+  line-height: 1.45;
+  text-align: center;
+  cursor: pointer;
+  box-shadow: 0 8px 26px rgba(0, 0, 0, .42);
+  animation: toast-in .2s ease-out;
+}
+
+.toast-bad {
+  border-color: color-mix(in srgb, var(--danger) 46%, var(--line));
+  color: var(--danger);
+}
+
+.toast.is-leaving { animation: toast-out .18s ease-in forwards; }
+
+@keyframes toast-in {
+  from { opacity: 0; transform: translateY(10px) scale(.97); }
+  to   { opacity: 1; transform: none; }
+}
+
+@keyframes toast-out {
+  from { opacity: 1; transform: none; }
+  to   { opacity: 0; transform: translateY(-6px) scale(.97); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .toast, .toast.is-leaving { animation: none; }
+}
+
+/* ---------- 確認框 ---------- */
+
+.ask {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 22px;
+  background: rgba(6, 7, 12, .72);
+  animation: fade .13s ease-out;
+}
+
+.ask-card {
+  width: min(100%, 330px);
+  padding: 20px 20px 16px;
+  border-radius: 17px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  box-shadow: 0 22px 60px rgba(0, 0, 0, .55);
+  animation: rise .16s ease-out;
+}
+
+.ask-title {
+  margin: 0 0 8px;
+  font-size: 15.5px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.ask-body {
+  margin: 0 0 18px;
+  font-size: 13.5px;
+  line-height: 1.55;
+  color: var(--muted);
+  word-break: break-word;
+  /* 引用的訊息可能很長，收在幾行內就好 */
+  display: -webkit-box;
+  -webkit-line-clamp: 4;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.ask-actions {
+  display: flex;
+  gap: 9px;
+  justify-content: flex-end;
+}
+
+.ask-btn {
+  appearance: none;
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 13.5px;
+  padding: 8px 16px;
+  border-radius: 10px;
+  cursor: pointer;
+  transition: background .12s, border-color .12s;
+}
+
+.ask-btn:hover { background: var(--surface-2); }
+
+.ask-btn:focus-visible {
+  outline: 2px solid var(--me);
+  outline-offset: 2px;
+}
+
+.ask-yes {
+  border-color: transparent;
+  background: var(--me);
+  color: #0b0d18;
+  font-weight: 600;
+}
+
+.ask-yes:hover { background: color-mix(in srgb, var(--me) 88%, #fff); }
+
+.ask-yes.is-danger {
+  background: var(--danger);
+  color: #1a0b0b;
+}
+
+.ask-yes.is-danger:hover { background: color-mix(in srgb, var(--danger) 88%, #fff); }
+
+@media (prefers-reduced-motion: reduce) {
+  .ask, .ask-card { animation: none; }
+}
+
 /* ---------- 拖曳提示 ---------- */
 
 .drop-hint {

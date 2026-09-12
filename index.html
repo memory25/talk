@@ -111,6 +111,21 @@
   <button id="lightbox-close" class="lightbox-close" type="button" title="關閉">✕</button>
 </div>
 
+<!-- 短暫浮現的提示，不打斷操作 -->
+<div id="toasts" class="toasts" role="status" aria-live="polite"></div>
+
+<!-- 需要回答的確認框 -->
+<div id="ask" class="ask" hidden role="dialog" aria-modal="true" aria-labelledby="ask-title">
+  <div class="ask-card">
+    <h2 id="ask-title" class="ask-title"></h2>
+    <p id="ask-body" class="ask-body"></p>
+    <div class="ask-actions">
+      <button id="ask-no" class="ask-btn" type="button"></button>
+      <button id="ask-yes" class="ask-btn ask-yes" type="button"></button>
+    </div>
+  </div>
+</div>
+
 <!-- 拖曳照片到視窗上時的提示 -->
 <div id="drop-hint" class="drop-hint" hidden>放開就傳送照片</div>
 
