@@ -195,6 +195,7 @@ const state = {
   actionsFor: null,  // 動作選單目前針對哪一則
   reactions: {},     // key -> { emoji: [誰, 誰] }
   peerPresence: null,// 對方最後回報的狀態，由計時器定期重新評估
+  peerDevice: null,  // 最後看過的對方裝置資訊，當作下保險
   showPresence: false,
 };
 
@@ -550,9 +551,11 @@ function watchPresence() {
     at: serverTimestamp(),
   });
 
-  // 連線中斷（關分頁、斷網、當機）時由伺服器自動標記離線
-  onDisconnect(myPresence).set({ online: false, active: false, at: serverTimestamp() });
-  set(myPresence, { online: true, active: true, at: serverTimestamp() });
+  // 連線中斷（關分頁、斷網、當機）時由伺服器自動標記離線。
+  // 這裡與下面都用 update 而不是 set：set 會把整個節點換掉，
+  // 連帶把 device 抹掉，對方一離線裝置資訊就消失了。
+  onDisconnect(myPresence).update({ online: false, active: false, at: serverTimestamp() });
+  update(myPresence, { online: true, active: true, at: serverTimestamp() });
 
   // 心跳照送，切到背景也不停——頁面還開著就還算在線上，
   // 只是把 active 標成 false，對方會看到「背景中」。
@@ -573,6 +576,10 @@ function watchPresence() {
   // 所以資料存在 state，由本地計時器定期重新評估。
   onValue(peerPresence, (snap) => {
     state.peerPresence = snap.val();
+    // 裝置資訊本來就是「最後一次回報的狀態」，不是即時值。
+    // 對方資料裡沒有這個欄位時就沿用上一次看過的，
+    // 面板才不會突然整個不見。
+    if (state.peerPresence?.device) state.peerDevice = state.peerPresence.device;
     renderPresence();
   });
 
@@ -604,7 +611,7 @@ const DEVICE_ICON = { "手機": "📱", "平板": "📓", "電腦": "💻" };
 function renderDevice() {
   if (!state.showPresence) return;
 
-  const dev = state.peerPresence?.device;
+  const dev = state.peerPresence?.device ?? state.peerDevice;
   const caret = $("peer-caret");
   const panel = $("device-panel");
 
@@ -1195,7 +1202,7 @@ function wireComposer() {
   $("leave").onclick = () => {
     if (!confirm("離開並忘記這台裝置上的身分？")) return;
     localStorage.removeItem(STORE_KEY);
-    set(state.refs.myPresence, { online: false, at: serverTimestamp() })
+    update(state.refs.myPresence, { online: false, active: false, at: serverTimestamp() })
       .finally(() => location.reload());
   };
 }
