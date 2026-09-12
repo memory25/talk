@@ -4,7 +4,7 @@
 
 import {
   firebaseConfig, ROOM_ID, USERS, OPTIONS,
-  QUICK_EMOJI, EMOJI_GROUPS, REACTIONS,
+  QUICK_EMOJI, EMOJI_GROUPS, REACTIONS, RETRACT,
 } from "./config.js";
 
 import { initializeApp }
@@ -14,7 +14,8 @@ import {
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
 import {
   getDatabase, ref, push, set, update, serverTimestamp,
-  query, limitToLast, onChildAdded, onValue, onDisconnect, off,
+  query, limitToLast, onChildAdded, onChildChanged,
+  onValue, onDisconnect, off,
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js";
 
 // ------------------------------------------------------------
@@ -189,7 +190,7 @@ const state = {
   typingSent: false,
   booted: false,     // 首批歷史訊息載完前不播音
   seen: new Set(),   // 已渲染的訊息 key，避免樂觀泡泡重複
-  msgs: new Map(),   // key -> 訊息內容，回覆預覽要用
+  msgs: new Map(),   // key -> 訊息內容，回覆預覽與收回要用
   replyTo: null,     // 正在回覆哪一則
   actionsFor: null,  // 動作選單目前針對哪一則
   reactions: {},     // key -> { emoji: [誰, 誰] }
@@ -301,6 +302,7 @@ async function enterRoom(me) {
   state.refs = {
     messages: ref(state.db, `${room}/messages`),
     reactions: ref(state.db, `${room}/reactions`),
+    retractions: ref(state.db, `${room}/retractions`),
     myPresence: ref(state.db, `${room}/presence/${me.id}`),
     peerPresence: ref(state.db, `${room}/presence/${state.peer.id}`),
     myTyping: ref(state.db, `${room}/typing/${me.id}`),
@@ -356,6 +358,15 @@ function watchMessages() {
     if (state.seen.has(snap.key)) return;
     state.seen.add(snap.key);
 
+    // 已經被刪除的舊訊息：連泡泡都不用畫，但仍要記在 msgs 裡，
+    // 這樣回覆它的那則訊息點引用時才知道原訊息已經不在了。
+    if (msg.retracted === "remove") {
+      state.msgs.set(snap.key, {
+        text: msg.text, from: msg.from, retracted: "remove",
+      });
+      return;
+    }
+
     // 樂觀泡泡：自己送的訊息已經先畫出來了，這裡把它換成正式的。
     // nonce 是本地產生的，字元固定是 [a-z0-9-]，不需要額外轉義。
     const optimistic = msg.nonce && /^[a-z0-9-]+$/i.test(msg.nonce)
@@ -368,8 +379,10 @@ function watchMessages() {
       if (stamp?.classList.contains("stamp")) {
         stamp.innerHTML = timeOf(msg.at || Date.now());
       }
-      // 補登記，剛送出的訊息才能被回覆或按反應
-      state.msgs.set(snap.key, { text: msg.text, from: msg.from });
+      // 補登記，剛送出的訊息才能被回覆、按反應或收回
+      state.msgs.set(snap.key, {
+        text: msg.text, from: msg.from, retracted: null,
+      });
       renderReactions(snap.key);
       return;
     }
@@ -377,6 +390,16 @@ function watchMessages() {
     const mine = msg.from === state.me.id;
     appendMessage({ ...msg, key: snap.key }, mine);
     if (!mine && state.booted) beep();
+  });
+
+  // 收回是就地改寫既有的那一筆，所以要另外聽 changed——
+  // 對方在你眼前按下收回時，畫面才會立刻跟著變。
+  onChildChanged(recent, (snap) => {
+    const msg = snap.val();
+    if (!msg) return;
+    const known = state.msgs.get(snap.key);
+    if (known) state.msgs.set(snap.key, { ...known, retracted: msg.retracted });
+    if (msg.retracted) applyRetraction(snap.key, msg);
   });
 
   // 首批歷史送完後才開始播音
@@ -403,14 +426,16 @@ function appendMessage(msg, mine, pending = false) {
 
   const run = state.lastAuthor === msg.from;
 
+  const recalled = msg.retracted === "recall";
+
   const bubble = document.createElement("div");
   bubble.className = `msg ${mine ? "mine" : "theirs"}${run ? " run-mid" : " run-start"}`
-    + (isJumbo(msg.text) ? " jumbo" : "");
+    + (recalled ? " recalled" : isJumbo(msg.text) ? " jumbo" : "");
   if (msg.key) bubble.dataset.key = msg.key;
   if (pending && msg.nonce) bubble.dataset.nonce = msg.nonce;
 
   // 引用被回覆的那則（存的是快照，原訊息之後就算變了也不影響）
-  if (msg.reply?.text) {
+  if (!recalled && msg.reply?.text) {
     const quote = document.createElement("div");
     const who = USERS.find((u) => u.id === msg.reply.from);
     const self = msg.reply.from === state.me?.id;
@@ -432,7 +457,12 @@ function appendMessage(msg, mine, pending = false) {
 
   const body = document.createElement("div");
   body.className = "msg-body";
-  body.innerHTML = renderText(msg.text);
+  if (recalled) {
+    body.textContent = `${RETRACT.recall.icon} ` +
+      (mine ? RETRACT.recall.noticeMine : RETRACT.recall.noticeTheirs);
+  } else {
+    body.innerHTML = renderText(msg.text);
+  }
   bubble.appendChild(body);
 
   const stamp = document.createElement("div");
@@ -449,8 +479,11 @@ function appendMessage(msg, mine, pending = false) {
   state.lastAuthor = msg.from;
 
   if (msg.key) {
-    state.msgs.set(msg.key, { text: msg.text, from: msg.from });
-    renderReactions(msg.key);   // 重新連線時已有的反應要補上
+    state.msgs.set(msg.key, {
+      text: msg.text, from: msg.from, retracted: msg.retracted ?? null,
+    });
+    // 收回後的泡泡不掛反應，舊的反應也跟著訊息一起收掉
+    if (!recalled) renderReactions(msg.key);
   }
 
   scrollToEnd();
@@ -638,7 +671,7 @@ function signalTyping(on) {
 
 function startReply(key) {
   const msg = state.msgs.get(key);
-  if (!msg) return;
+  if (!msg || msg.retracted) return;
 
   state.replyTo = { key, from: msg.from, text: msg.text };
 
@@ -662,6 +695,7 @@ function cancelReply() {
 /** 點引用區塊時捲到原訊息並閃一下。 */
 function jumpTo(key) {
   const target = document.querySelector(`.msg[data-key="${key}"]`);
+  // 原訊息被刪掉了就沒得跳，引用裡的快照還看得到內容
   if (!target) return;
   target.scrollIntoView({ block: "center", behavior: "smooth" });
   target.classList.remove("flash");
@@ -670,11 +704,113 @@ function jumpTo(key) {
 }
 
 // ------------------------------------------------------------
+//  收回
+// ------------------------------------------------------------
+
+/**
+ * 收回一則自己發的訊息。
+ *
+ * mode "recall"：泡泡換成一行淡色提示，兩人都知道有東西被收回。
+ * mode "remove"：整則從畫面上消失，像沒發生過。
+ *
+ * 兩種都只是「畫面上收回」——原文照樣留在 messages 那一筆裡，
+ * 另外在 retractions 底下再寫一份完整快照，之後要統整就讀那裡。
+ */
+async function retract(key, mode) {
+  const msg = state.msgs.get(key);
+  if (!msg) return;
+  if (msg.from !== state.me.id) return;     // 只能收回自己的
+  if (msg.retracted) return;                // 收回過就不用再收一次
+
+  const conf = mode === "remove" ? RETRACT.remove : RETRACT.recall;
+  if (OPTIONS.confirmRetract) {
+    const peek = msg.text.length > 40 ? `${msg.text.slice(0, 40)}…` : msg.text;
+    if (!confirm(`${conf.label}這則訊息？\n\n${peek}`)) return;
+  }
+
+  // 先動畫面，對方那邊由 onChildChanged 推過去。
+  // 失敗的話下面會還原。
+  const before = msg.retracted ?? null;
+  state.msgs.set(key, { ...msg, retracted: mode });
+  applyRetraction(key, { ...msg, retracted: mode });
+
+  try {
+    // 稽核紀錄先寫，確保「畫面上沒了但帳上查不到」這種狀況不會發生
+    await set(ref(state.db, `rooms/${ROOM_ID}/retractions/${key}`), {
+      text: msg.text,
+      from: msg.from,
+      mode,
+      at: msg.at ?? null,
+      retractedAt: serverTimestamp(),
+      retractedBy: state.me.id,
+    });
+
+    await update(ref(state.db, `rooms/${ROOM_ID}/messages/${key}`), {
+      retracted: mode,
+      retractedAt: serverTimestamp(),
+      retractedBy: state.me.id,
+    });
+
+    // 訊息收回了，掛在它上面的反應也沒有依托。
+    // 清掉是為了不讓 reactions 底下留孤兒資料；
+    // 上面的稽核快照已經寫好了，這裡失敗也無傷大雅。
+    set(ref(state.db, `rooms/${ROOM_ID}/reactions/${key}`), null)
+      .catch(() => { /* 下次重新整理再說 */ });
+  } catch (e) {
+    console.error("retract failed:", e);
+    // 還原畫面，免得看起來收回成功、其實對方那邊還在
+    state.msgs.set(key, { ...msg, retracted: before });
+    alert("收回失敗，訊息還在。檢查一下網路再試。");
+    location.reload();
+  }
+}
+
+/** 把某則訊息在畫面上改成收回後的樣子。 */
+function applyRetraction(key, msg) {
+  const bubble = document.querySelector(`.msg[data-key="${key}"]`);
+  if (!bubble) return;
+
+  // 收回的訊息不再是可操作的對象，選單開著就先收掉
+  if (state.actionsFor === key) closeActions();
+  // 正在回覆它的話也一併取消
+  if (state.replyTo?.key === key) cancelReply();
+
+  // 泡泡後面可能先排了反應列，再來才是時間戳
+  const reactions = bubble.nextElementSibling?.classList.contains("reactions")
+    ? bubble.nextElementSibling
+    : null;
+  const stamp = reactions ? reactions.nextElementSibling : bubble.nextElementSibling;
+
+  // 反應跟著訊息一起收掉
+  reactions?.remove();
+
+  if (msg.retracted === "remove") {
+    bubble.remove();
+    if (stamp?.classList.contains("stamp")) stamp.remove();
+    // 前後兩則可能原本被連續發言的規則收掉了時間戳，重排比較麻煩，
+    // 這裡接受畫面上留一個空隙——下一次重新整理就會排乾淨。
+    return;
+  }
+
+  const mine = msg.from === state.me.id;
+  bubble.classList.add("recalled");
+  bubble.classList.remove("jumbo");
+  bubble.querySelector(".quote")?.remove();
+
+  const body = bubble.querySelector(".msg-body");
+  if (body) {
+    body.textContent = `${RETRACT.recall.icon} ` +
+      (mine ? RETRACT.recall.noticeMine : RETRACT.recall.noticeTheirs);
+  }
+}
+
+// ------------------------------------------------------------
 //  反應
 // ------------------------------------------------------------
 
 /** 切換自己對某則訊息的某個反應：已按過就取消，沒按過就加上。 */
 async function toggleReaction(key, emoji) {
+  if (state.msgs.get(key)?.retracted) return;
   const mineNow = state.reactions[key]?.[emoji]?.includes(state.me.id);
   const path = `rooms/${ROOM_ID}/reactions/${key}/${emoji}/${state.me.id}`;
   try {
@@ -686,7 +822,7 @@ async function toggleReaction(key, emoji) {
 
 function renderReactions(key) {
   const bubble = document.querySelector(`.msg[data-key="${key}"]`);
-  if (!bubble) return;
+  if (!bubble || bubble.classList.contains("recalled")) return;
 
   const data = state.reactions[key] || {};
   const entries = Object.entries(data).filter(([, users]) => users.length);
@@ -749,8 +885,17 @@ function openActions(bubble) {
   const key = bubble.dataset.key;
   if (!key) return;                        // 還在傳送中的訊息不給操作
 
+  const msg = state.msgs.get(key);
+  if (msg?.retracted) return;              // 收回過的訊息沒什麼好操作的
+
   state.actionsFor = key;
   const menu = $("actions");
+
+  // 只有自己發的訊息才給收回，不限時間
+  const mine = msg?.from === state.me.id;
+  $("act-recall").hidden = !mine;
+  $("act-remove").hidden = !mine;
+
   menu.hidden = false;
 
   // 先量尺寸再定位，否則 hidden 時量到 0
@@ -795,6 +940,27 @@ function wireActions() {
   $("act-reply").onclick = () => {
     if (state.actionsFor) startReply(state.actionsFor);
     closeActions();
+  };
+
+  // 按鈕上的字樣跟著 config 走，改一個地方就好
+  [["act-recall", RETRACT.recall], ["act-remove", RETRACT.remove]]
+    .forEach(([id, conf]) => {
+      $(id).innerHTML =
+        `<span aria-hidden="true">${renderText(conf.icon)}</span> ` +
+        renderText(conf.label);
+    });
+
+  // 收回：留下灰字提示；刪除：整則消失。兩者都只收回畫面，原文留在資料庫。
+  $("act-recall").onclick = () => {
+    const key = state.actionsFor;
+    closeActions();
+    if (key) retract(key, "recall");
+  };
+
+  $("act-remove").onclick = () => {
+    const key = state.actionsFor;
+    closeActions();
+    if (key) retract(key, "remove");
   };
 
   $("reply-cancel").onclick = cancelReply;

@@ -367,6 +367,19 @@ body {
   padding: 2px 6px;
 }
 
+/* 收回後的泡泡：退成一行不搶眼的提示，但仍佔著原本的位置 */
+.msg.recalled {
+  background: transparent;
+  border: 1px dashed var(--line);
+  color: var(--muted);
+  font-size: 13px;
+  font-style: italic;
+  padding: 7px 12px;
+  cursor: default;
+}
+
+.msg.recalled .msg-body { user-select: none; }
+
 .msg a { color: inherit; text-decoration: underline; text-underline-offset: 2px; }
 
 .stamp {
@@ -567,6 +580,17 @@ body.pressing .msg {
 }
 
 .act-btn:hover { background: var(--surface-2); }
+
+/* 反應列後面第一顆按鈕才需要那道分隔線，後面的彼此靠著就好 */
+.act-btn + .act-btn {
+  border-left: 0;
+  margin-left: 0;
+  border-radius: 9px;
+  padding-left: 9px;
+}
+
+.act-danger { color: var(--danger); }
+.act-danger:hover { background: color-mix(in srgb, var(--danger) 14%, transparent); }
 
 /* ---------- 回覆中提示列 ---------- */
 

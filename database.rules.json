@@ -2,7 +2,14 @@
   "rules": {
     "rooms": {
       ".read": "auth != null",
-      ".write": "auth != null"
+      ".write": "auth != null",
+      "$room": {
+        "messages": {
+          "$msg": {
+            ".validate": "!data.exists() || (newData.child('from').val() === data.child('from').val() && newData.child('text').val() === data.child('text').val())"
+          }
+        }
+      }
     }
   }
 }
