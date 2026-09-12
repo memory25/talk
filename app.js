@@ -113,6 +113,66 @@ function fatal(message) {
   $("gate-submit").disabled = true;
 }
 
+/**
+ * 收集這台裝置不需要授權就能拿到的資訊，寫進資料庫給對方看。
+ * 全部是雙向對等的——兩個人看得到的欄位一模一樣。
+ */
+async function collectDevice() {
+  const ua = navigator.userAgent;
+
+  // 從 UA 粗略判斷裝置類型
+  let kind = "電腦";
+  if (/iPad|Tablet/.test(ua)) kind = "平板";
+  else if (/iPhone|Android.*Mobile|Mobile/.test(ua)) kind = "手機";
+
+  // 作業系統
+  let os = "未知";
+  if (/Windows/.test(ua)) os = "Windows";
+  else if (/iPhone|iPad|iPod/.test(ua)) os = "iOS";
+  else if (/Mac OS X/.test(ua)) os = "macOS";
+  else if (/Android/.test(ua)) os = "Android";
+  else if (/Linux/.test(ua)) os = "Linux";
+
+  // 瀏覽器（順序有講究：Edge 也含 Chrome 字樣）
+  let browser = "未知";
+  if (/Edg\//.test(ua)) browser = "Edge";
+  else if (/OPR\/|Opera/.test(ua)) browser = "Opera";
+  else if (/Firefox\//.test(ua)) browser = "Firefox";
+  else if (/Chrome\//.test(ua)) browser = "Chrome";
+  else if (/Safari\//.test(ua)) browser = "Safari";
+
+  const dev = {
+    kind,
+    os,
+    browser,
+    screen: `${screen.width}×${screen.height}`,
+    lang: navigator.language || "",
+    tz: (() => { try { return Intl.DateTimeFormat().resolvedOptions().timeZone; } catch { return ""; } })(),
+  };
+
+  // 電量（部分瀏覽器已移除這個 API，拿不到就算了）
+  try {
+    if (navigator.getBattery) {
+      const b = await navigator.getBattery();
+      dev.battery = Math.round(b.level * 100);
+      dev.charging = b.charging;
+    }
+  } catch { /* 沒有就沒有 */ }
+
+  // 大略位置：靠免費 IP 定位服務，城市級、可能失敗
+  try {
+    const r = await fetch("https://ipapi.co/json/", { signal: AbortSignal.timeout(4000) });
+    if (r.ok) {
+      const j = await r.json();
+      dev.city = j.city || "";
+      dev.region = j.region || "";
+      dev.country = j.country_name || "";
+    }
+  } catch { /* 服務擋掉或逾時就略過位置 */ }
+
+  return dev;
+}
+
 // ------------------------------------------------------------
 //  狀態
 // ------------------------------------------------------------
@@ -255,6 +315,20 @@ async function enterRoom(me) {
   $("peer-name").textContent = state.showPresence ? state.peer.label : "";
   $("peer-dot").hidden = !state.showPresence;
   $("peer-state").hidden = !state.showPresence;
+
+  // 沒走後門時，標題列不能點開（連 caret 都不出現）
+  if (state.showPresence) {
+    $("peer").onclick = () => {
+      const panel = $("device-panel");
+      if ($("peer-caret").hidden) return;   // 對方還沒回報裝置資訊
+      const open = panel.hidden;
+      panel.hidden = !open;
+      $("peer").setAttribute("aria-expanded", String(open));
+      $("peer-caret").textContent = open ? "▴" : "▾";
+    };
+  } else {
+    $("peer").style.cursor = "default";
+  }
 
   watchMessages();
   watchReactions();
@@ -453,6 +527,12 @@ function watchPresence() {
 
   document.addEventListener("visibilitychange", beat);
 
+  // 裝置資訊只收集一次寫進去（IP 查詢較慢，不必每次心跳都重抓）。
+  // 兩個人都會寫、也都看得到對方的，是雙向對等的。
+  collectDevice()
+    .then((dev) => update(myPresence, { device: dev }))
+    .catch(() => { /* 拿不到裝置資訊不影響聊天 */ });
+
   // onValue 只在資料變動時觸發，光靠它沒辦法讓「過期」自己浮現，
   // 所以資料存在 state，由本地計時器定期重新評估。
   onValue(peerPresence, (snap) => {
@@ -478,6 +558,50 @@ function renderPresence() {
     : p?.at
       ? `上次上線 ${dayOf(p.at)} ${timeOf(p.at)}`
       : "還沒來過";
+
+  renderDevice();
+}
+
+const DEVICE_ICON = { "手機": "📱", "平板": "📓", "電腦": "💻" };
+
+/** 把對方的裝置資訊畫進可展開的面板。 */
+function renderDevice() {
+  if (!state.showPresence) return;
+
+  const dev = state.peerPresence?.device;
+  const caret = $("peer-caret");
+  const panel = $("device-panel");
+
+  if (!dev) {
+    caret.hidden = true;
+    panel.hidden = true;
+    $("peer").setAttribute("aria-expanded", "false");
+    return;
+  }
+  caret.hidden = false;
+
+  const place = [dev.city, dev.region, dev.country]
+    .filter(Boolean)
+    // region 常和 city 或 country 重複，去掉相鄰重複
+    .filter((v, i, a) => v !== a[i - 1])
+    .join("、");
+
+  const rows = [
+    ["裝置", `${DEVICE_ICON[dev.kind] || ""} ${dev.kind}`.trim()],
+    ["系統", dev.os],
+    ["瀏覽器", dev.browser],
+    ["螢幕", dev.screen],
+    ["語言", dev.lang],
+    ["時區", dev.tz],
+    dev.battery != null ? ["電量", `${dev.battery}%${dev.charging ? " ⚡充電中" : ""}`] : null,
+    place ? ["大略位置", place] : null,
+  ].filter(Boolean);
+
+  panel.innerHTML = rows
+    .map(([k, v]) =>
+      `<div class="device-row"><span class="device-k">${k}</span>` +
+      `<span class="device-v">${renderText(String(v))}</span></div>`)
+    .join("");
 }
 
 // ------------------------------------------------------------

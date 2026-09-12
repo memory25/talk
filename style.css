@@ -187,7 +187,53 @@ body {
   backdrop-filter: blur(12px);
 }
 
-.peer { display: flex; align-items: center; gap: 11px; min-width: 0; }
+.peer {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  min-width: 0;
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  padding: 4px 6px 4px 4px;
+  margin: -4px -6px -4px -4px;
+  border-radius: 10px;
+  cursor: pointer;
+  transition: background .12s;
+}
+
+.peer[aria-expanded="true"] { background: var(--surface-2); }
+.peer-caret { color: var(--muted); font-size: 11px; margin-left: 2px; }
+
+.device-panel {
+  flex: none;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
+  padding: 10px 16px 12px;
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 6px 16px;
+  font-size: 13px;
+  animation: rise .15s ease-out;
+}
+
+.device-row { display: contents; }
+
+.device-k {
+  color: var(--muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.device-v {
+  color: var(--text);
+  word-break: break-word;
+  justify-self: end;
+  text-align: right;
+}
 
 .dot {
   flex: none;

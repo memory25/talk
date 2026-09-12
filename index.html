@@ -37,18 +37,22 @@
 <!-- ========== 聊天畫面 ========== -->
 <div id="chat" class="chat" hidden>
   <header class="bar">
-    <div class="peer">
+    <button id="peer" class="peer" type="button" aria-expanded="false">
       <span id="peer-dot" class="dot" aria-hidden="true"></span>
-      <div class="peer-text">
+      <span class="peer-text">
         <strong id="peer-name">—</strong>
         <small id="peer-state">連線中…</small>
-      </div>
-    </div>
+      </span>
+      <span id="peer-caret" class="peer-caret" aria-hidden="true" hidden>▾</span>
+    </button>
     <div class="bar-actions">
       <button id="sound-toggle" class="icon-btn" title="提示音" aria-pressed="true">🔔</button>
       <button id="leave" class="icon-btn" title="離開">⏻</button>
     </div>
   </header>
+
+  <!-- 對方的裝置資訊（雙向對等，兩人都看得到彼此的相同欄位） -->
+  <div id="device-panel" class="device-panel" hidden></div>
 
   <div id="stream" class="stream" role="log" aria-live="polite">
     <p id="stream-empty" class="stream-empty">還沒有任何訊息。說點什麼吧。</p>
