@@ -62,6 +62,30 @@ enabling anonymous authentication, and pasting the resulting config object in.
 The rules in [database.rules.json](database.rules.json) require an authenticated
 session to read or write.
 
+## Device info
+
+The panel behind the header shows what the other person is on. Everything in it
+is symmetrical — both people see the same fields about each other — and all of
+it is read without asking for a permission prompt.
+
+Phone models are a special case, because the two platforms give away very
+different amounts:
+
+- **Android** puts the real model in its User-Agent (`SM-S918B`, `Pixel 7 Pro`),
+  so it is shown as 機型. Recent Chrome versions replace it with a bare `K` to
+  frustrate fingerprinting; that and similar placeholders are treated as a miss.
+- **iOS** never does. Every iPhone sends the same `iPhone` token, deliberately,
+  so the model has to be inferred from the screen size and pixel ratio. Several
+  generations share a size, so the best that can be done is a short list of
+  candidates, shown as 可能機型 and styled to read as a guess rather than a fact.
+
+The lookup table lives in [config.js](config.js) as `IPHONE_MODELS`; add a row
+when a new size appears. An unrecognised size simply omits the field.
+
+Battery is only available on Chrome and Edge — Firefox and Safari removed the
+API — and the approximate location comes from a free IP service that may be
+blocked or rate-limited. Either one is skipped when unavailable.
+
 ## Retracting messages
 
 Long-press (or right-click) one of your own messages and the action menu offers

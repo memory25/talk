@@ -4,7 +4,7 @@
 
 import {
   firebaseConfig, ROOM_ID, USERS, OPTIONS,
-  QUICK_EMOJI, EMOJI_GROUPS, REACTIONS, RETRACT,
+  QUICK_EMOJI, EMOJI_GROUPS, REACTIONS, RETRACT, IPHONE_MODELS,
 } from "./config.js";
 
 import { initializeApp }
@@ -142,14 +142,36 @@ async function collectDevice() {
   else if (/Chrome\//.test(ua)) browser = "Chrome";
   else if (/Safari\//.test(ua)) browser = "Safari";
 
+  // 手機橫放時 screen 的寬高會對調，統一成直向才查得到表、
+  // 也才不會同一支手機轉個方向就顯示成不同尺寸。
+  const shorter = Math.min(screen.width, screen.height);
+  const longer = Math.max(screen.width, screen.height);
+  const dpr = Math.round(window.devicePixelRatio || 1);
+
   const dev = {
     kind,
     os,
     browser,
-    screen: `${screen.width}×${screen.height}`,
+    screen: `${shorter}×${longer}`,
     lang: navigator.language || "",
     tz: (() => { try { return Intl.DateTimeFormat().resolvedOptions().timeZone; } catch { return ""; } })(),
   };
+
+  // 機型：Android 的 UA 帶著真型號，iPhone 只能靠螢幕尺寸猜。
+  // 兩者準確度差很多，所以分成 model（確定）與 maybeModel（推測）。
+  //
+  // 近年的 Android Chrome 為了防指紋追蹤，會把型號改寫成單一個 "K"，
+  // 也有些瀏覽器留下 "Android"、"Mobile" 這類沒有資訊量的字。
+  // 這些一律當作沒抓到，不然畫面上會出現「機型：K」這種怪東西。
+  const android = ua.match(/Android[^;)]*;\s*([^;)]+?)\s*(?:Build\/|[;)])/);
+  const model = android?.[1]?.trim();
+  if (model && model.length > 1 && !/^(K|Android|Mobile|Linux)$/i.test(model)) {
+    dev.model = model.slice(0, 40);
+  } else if (/iPhone/.test(ua)) {
+    const hit = IPHONE_MODELS.find(
+      (m) => m.size === `${shorter}×${longer}` && m.dpr === dpr);
+    if (hit) dev.maybeModel = hit.names.join("／");
+  }
 
   // 電量（部分瀏覽器已移除這個 API，拿不到就算了）
   try {
@@ -631,6 +653,9 @@ function renderDevice() {
 
   const rows = [
     ["裝置", `${DEVICE_ICON[dev.kind] || ""} ${dev.kind}`.trim()],
+    // Android 讀得到真型號；iPhone 只能靠螢幕尺寸推測，標清楚免得誤會
+    dev.model ? ["機型", dev.model] : null,
+    dev.maybeModel ? ["可能機型", dev.maybeModel, true] : null,
     ["系統", dev.os],
     ["瀏覽器", dev.browser],
     ["螢幕", dev.screen],
@@ -641,8 +666,9 @@ function renderDevice() {
   ].filter(Boolean);
 
   panel.innerHTML = rows
-    .map(([k, v]) =>
-      `<div class="device-row"><span class="device-k">${k}</span>` +
+    .map(([k, v, guess]) =>
+      `<div class="device-row${guess ? " is-guess" : ""}">` +
+      `<span class="device-k">${k}</span>` +
       `<span class="device-v">${renderText(String(v))}</span></div>`)
     .join("");
 }

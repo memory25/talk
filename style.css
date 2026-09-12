@@ -235,6 +235,12 @@ body {
   text-align: right;
 }
 
+/* 推測出來的機型：講不死，所以視覺上也弱一階 */
+.device-row.is-guess .device-v {
+  color: var(--muted);
+  font-style: italic;
+}
+
 .dot {
   flex: none;
   width: 9px;

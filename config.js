@@ -140,7 +140,32 @@ export const RETRACT = {
   },
 };
 
-// --- 6. 雜項 ---------------------------------------------------
+// --- 6. iPhone 機型對照 ----------------------------------------
+// 網頁上拿不到 iPhone 的型號：iOS 的 User-Agent 一律只寫 "iPhone"，
+// Apple 刻意不放型號代碼以防指紋追蹤（Android 反而讀得到真型號）。
+//
+// 所以這裡只能靠螢幕尺寸反推，而且好幾代共用同一組數字，
+// 頂多縮到幾個候選。畫面上會標成「可能機型」，不會講死。
+//
+// key 是 `寬×高`（CSS px，直向），dpr 是 devicePixelRatio。
+// 新機出來時照格式往下加就好；查不到的就不顯示這一列。
+export const IPHONE_MODELS = [
+  { size: "320×568", dpr: 2, names: ["iPhone SE 1"] },
+  { size: "375×667", dpr: 2, names: ["iPhone SE 2／3", "iPhone 6／7／8"] },
+  { size: "414×736", dpr: 3, names: ["iPhone 6／7／8 Plus"] },
+  { size: "375×812", dpr: 3, names: ["iPhone X／XS", "iPhone 11 Pro", "iPhone 12／13 mini"] },
+  { size: "414×896", dpr: 2, names: ["iPhone XR", "iPhone 11"] },
+  { size: "414×896", dpr: 3, names: ["iPhone XS Max", "iPhone 11 Pro Max"] },
+  { size: "390×844", dpr: 3, names: ["iPhone 12／13", "iPhone 14", "iPhone 16e"] },
+  { size: "428×926", dpr: 3, names: ["iPhone 12／13 Pro Max", "iPhone 14 Plus"] },
+  { size: "393×852", dpr: 3, names: ["iPhone 14 Pro", "iPhone 15／15 Pro", "iPhone 16"] },
+  { size: "430×932", dpr: 3, names: ["iPhone 14 Pro Max", "iPhone 15 Plus／15 Pro Max", "iPhone 16 Plus"] },
+  { size: "402×874", dpr: 3, names: ["iPhone 16 Pro", "iPhone 17 Pro"] },
+  { size: "440×956", dpr: 3, names: ["iPhone 16 Pro Max", "iPhone 17 Pro Max"] },
+  { size: "420×912", dpr: 3, names: ["iPhone Air"] },
+];
+
+// --- 7. 雜項 ---------------------------------------------------
 export const OPTIONS = {
   // 一次載入的歷史訊息上限（訊息永久保留，這只影響單次顯示筆數）
   messageLimit: 500,
