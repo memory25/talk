@@ -25,8 +25,6 @@ export const ROOM_ID = "our-room";
 // label  : 顯示在畫面上的名字，隨時可以改
 // keys   : 進場時可以輸入的字，一個人可以有好幾個（不分大小寫）
 // accent : 這個人的訊息泡泡顏色
-//
-// 進場時在後面多打三個點（例如「sam...」）才會顯示對方的上線狀態。
 export const USERS = [
   {
     id: "a",

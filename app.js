@@ -28,11 +28,7 @@ const SOUND_KEY = "talk.sound";
 /** 正規化輸入：去空白、統一大小寫，讓 a 和 A 都算數。 */
 const normalize = (text) => String(text).normalize("NFKC").trim().toUpperCase();
 
-/**
- * 找出輸入的字對應哪個人。
- * 後面多打三個點（例如「A...」）代表要顯示對方的上線狀態，
- * 平常只打「A」則整個狀態區都不出現。半形與全形句點都接受。
- */
+/** 解析輸入，找出對應的使用者與顯示模式。 */
 const matchUser = (typed) => {
   let key = normalize(typed);
   if (!key) return null;
@@ -138,11 +134,11 @@ const state = {
   actionsFor: null,  // 動作選單目前針對哪一則
   reactions: {},     // key -> { emoji: [誰, 誰] }
   peerPresence: null,// 對方最後回報的狀態，由計時器定期重新評估
-  showPresence: false, // 進場時打了「A...」才顯示上線狀態
+  showPresence: false,
 };
 
 // ------------------------------------------------------------
-//  進場：輸入 A 或 B
+//  進場
 // ------------------------------------------------------------
 
 function checkConfig() {
@@ -202,7 +198,6 @@ async function tryRestore() {
       localStorage.removeItem(STORE_KEY);
       return false;
     }
-    // 上次是不是走後門進來的，重新整理後也照著來
     await enterRoom({ ...user, showPresence: Boolean(saved.showPresence) });
     return true;
   } catch {
@@ -256,7 +251,6 @@ async function enterRoom(me) {
   $("chat").hidden = false;
   $("sound-toggle").setAttribute("aria-pressed", String(state.sound));
 
-  // 沒走後門就連對方是誰都不顯示，標題列看不出任何線索
   state.showPresence = Boolean(me.showPresence);
   $("peer-name").textContent = state.showPresence ? state.peer.label : "";
   $("peer-dot").hidden = !state.showPresence;
@@ -470,7 +464,6 @@ function watchPresence() {
 }
 
 function renderPresence() {
-  // 沒走後門進來就不揭露對方在不在
   if (!state.showPresence) return;
 
   const p = state.peerPresence;
@@ -498,7 +491,6 @@ function watchTyping() {
     const t = snap.val();
     const active = t?.on && Date.now() - (t.at || 0) < OPTIONS.typingTimeout + 2000;
     $("typing").hidden = !active;
-    // 沒走後門就不指名道姓
     $("typing-text").textContent = active
       ? (state.showPresence ? `${state.peer.label} 正在輸入…` : "正在輸入…")
       : "";
