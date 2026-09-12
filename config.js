@@ -129,6 +129,8 @@ export const OPTIONS = {
   typingTimeout: 2500,
   // 多久送一次心跳告訴對方「我還在」
   heartbeat: 15000,
+  // 多久重抓一次裝置資訊與大略位置（毫秒）；1 小時 = 3600000
+  deviceRefresh: 3600000,
   // 超過幾毫秒沒有心跳就視為離線
   // （要留足夠餘裕：瀏覽器會拉長背景分頁的計時器，抓太短會誤判）
   offlineAfter: 70000,

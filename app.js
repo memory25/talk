@@ -527,11 +527,14 @@ function watchPresence() {
 
   document.addEventListener("visibilitychange", beat);
 
-  // 裝置資訊只收集一次寫進去（IP 查詢較慢，不必每次心跳都重抓）。
-  // 兩個人都會寫、也都看得到對方的，是雙向對等的。
-  collectDevice()
+  // 裝置資訊：進場先抓一次，之後每小時重抓（IP 查詢較慢、也有限流，
+  // 不必更密）。兩個人都會寫、也都看得到對方的，是雙向對等的。
+  const refreshDevice = () => collectDevice()
     .then((dev) => update(myPresence, { device: dev }))
     .catch(() => { /* 拿不到裝置資訊不影響聊天 */ });
+
+  refreshDevice();
+  setInterval(refreshDevice, OPTIONS.deviceRefresh);
 
   // onValue 只在資料變動時觸發，光靠它沒辦法讓「過期」自己浮現，
   // 所以資料存在 state，由本地計時器定期重新評估。
