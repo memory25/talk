@@ -15,6 +15,13 @@
               ".validate": "newData.isString() && newData.val().length <= 400000"
             }
           }
+        },
+        "voices": {
+          "$voice": {
+            "data": {
+              ".validate": "newData.isString() && newData.val().length <= 400000"
+            }
+          }
         }
       }
     }

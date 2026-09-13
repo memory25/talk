@@ -16,6 +16,8 @@ No bundler, no `npm install`, no dependencies to keep up to date.
 - Reply to a specific message, with a quoted snapshot of the original
 - Retract your own messages two ways, with the original text kept in the database
 - Send photos that expire an hour after the other person has actually seen them
+- Record voice messages, which expire two hours after they have been heard
+- Optionally share a precise location, shown in the other person's device panel
 - Emoji reactions, plus a quick-pick row and a categorised picker
 - Typing indicator and a sound on incoming messages
 - Message text is escaped before rendering; URLs are linkified
@@ -117,6 +119,39 @@ whichever client is online; both running it is harmless.
 The photo body lives under `rooms/<room>/photos/<id>` and the message only
 carries that id, so pulling message history does not re-download every image.
 
+## Voice messages
+
+Hold the microphone button to record and release to send, or tap it once to
+start and again to stop. Recording caps at 60 seconds and sends itself at the
+limit, so a forgotten finger does not produce a ten-minute message; anything
+under a second is discarded as a mis-tap.
+
+Browsers differ on what they can record — iOS Safari only gained WebM in 18.4
+— so the format is chosen at runtime, preferring `audio/mp4` because it is the
+one both sides are most likely to play. No compression code is needed: what
+MediaRecorder produces is already compressed, and 30 seconds comes to about
+117 KB, smaller than a photo.
+
+Expiry follows the same shape as photos, keyed on whether the message was
+actually heard: two hours after it has been played at least halfway, or 24
+hours if nobody plays it. Voice gets longer than a photo because wanting to
+replay something is common.
+
+## Precise location
+
+The device panel normally shows only the city that an IP lookup returns. A few
+seconds after entering, the app asks once whether to share a precise location
+as well; the answer is remembered on that device, and declining is never asked
+about again.
+
+When sharing is on, coordinates are written under the sharer's presence node
+every ten minutes and appear as an extra row, linked to a map. The write is an
+`update` touching only that one field, and a failed fix writes nothing at all,
+so losing signal or revoking the permission leaves the last known position in
+place rather than blanking it.
+
+Coordinates are rounded to four decimal places, roughly 11 metres.
+
 ## Quota
 
 Firebase only reports real usage in its console, not to clients, so the app
@@ -124,10 +159,15 @@ keeps its own tally: every photo upload adds its byte count to a per-month
 counter at `rooms/<room>/usage/<YYYY-MM>`. When the estimate crosses 75% of the
 free tier's 10 GB, the camera button is disabled and says why.
 
-Only photos are counted — text and presence traffic are negligible next to a
-265 KB image — and the total is inflated by 15% as a margin, so the cutoff lands
-around 6.5 GB of real use. Photos already sent keep working; only new uploads
-stop. Both numbers are in [config.js](config.js) under `QUOTA`.
+Only photos and voice messages are counted — text and presence traffic are
+negligible beside them — and the total is inflated by 15% as a margin, so the
+cutoff lands around 6.5 GB of real use. Media already sent keeps working; only
+new uploads stop. Both numbers are in [config.js](config.js) under `QUOTA`.
+
+Entering with the `...` suffix adds a meter to the top of the 🗂 panel showing
+where the month stands, with a tick marking the cutoff, so it can be watched
+before it becomes a problem. The counter lives at `rooms/<room>/usage/<YYYY-MM>`
+and a new month simply starts a new key.
 
 ## Retracting messages
 

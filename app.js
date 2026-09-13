@@ -5,7 +5,7 @@
 import {
   firebaseConfig, ROOM_ID, USERS, OPTIONS,
   QUICK_EMOJI, EMOJI_GROUPS, REACTIONS, RETRACT, IPHONE_MODELS,
-  PHOTO, QUOTA,
+  PHOTO, QUOTA, VOICE, GEO,
 } from "./config.js";
 
 import { initializeApp }
@@ -315,6 +315,41 @@ const usageRatio = () =>
 const quotaBlocked = () => usageRatio() >= QUOTA.stopUploadAt;
 
 // ------------------------------------------------------------
+//  語音
+// ------------------------------------------------------------
+
+/**
+ * 挑一個這台裝置錄得出來、對方也播得動的格式。
+ *
+ * iOS Safari 要到 18.4 才支援 WebM，在那之前只錄得出 MP4/AAC；
+ * 而兩邊裝置可能不同，所以優先挑相容性最好的 MP4——
+ * 檔案略大一點，但不會發生「錄得出來卻播不了」。
+ */
+function pickAudioType() {
+  if (typeof MediaRecorder === "undefined") return null;
+  const wanted = [
+    "audio/mp4",                  // iOS 一定有，其他家多半也讀得動
+    "audio/webm;codecs=opus",
+    "audio/webm",
+    "audio/ogg;codecs=opus",
+  ];
+  return wanted.find((t) => MediaRecorder.isTypeSupported(t)) ?? null;
+}
+
+/** blob 轉 data URL，才能塞進 Realtime Database。 */
+const blobToDataUrl = (blob) => new Promise((resolve, reject) => {
+  const fr = new FileReader();
+  fr.onload = () => resolve(fr.result);
+  fr.onerror = () => reject(fr.error);
+  fr.readAsDataURL(blob);
+});
+
+const fmtDuration = (sec) => {
+  const s = Math.max(0, Math.round(sec));
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+};
+
+// ------------------------------------------------------------
 //  狀態
 // ------------------------------------------------------------
 
@@ -342,6 +377,10 @@ const state = {
   seenTimers: new Map(), // 圖片 id -> 停留計時器，看滿才算已讀
   photoObserver: null,
   retractionLog: [],  // 收回紀錄，只有走後門時才會填
+  voices: new Map(),  // 語音 id -> { data, from, at, heardAt }
+  rec: null,          // 正在錄音時的狀態
+  geoWatch: null,     // GPS 監看的 id
+  peerGeo: null,      // 最後看過的對方座標，定位暫時失敗時沿用
 };
 
 // ------------------------------------------------------------
@@ -450,6 +489,7 @@ async function enterRoom(me) {
     reactions: ref(state.db, `${room}/reactions`),
     retractions: ref(state.db, `${room}/retractions`),
     photos: ref(state.db, `${room}/photos`),
+    voices: ref(state.db, `${room}/voices`),
     usage: ref(state.db, `${room}/usage/${usageKey()}`),
     myPresence: ref(state.db, `${room}/presence/${me.id}`),
     peerPresence: ref(state.db, `${room}/presence/${state.peer.id}`),
@@ -483,6 +523,7 @@ async function enterRoom(me) {
   watchMessages();
   watchReactions();
   watchPhotos();
+  watchVoices();
   watchUsage();
   watchRetractionLog();
   watchPresence();
@@ -492,6 +533,7 @@ async function enterRoom(me) {
   wireComposer();
 
   $("input").focus();
+  setupGeo();
 }
 
 // ------------------------------------------------------------
@@ -542,6 +584,11 @@ function watchMessages() {
         const photo = state.photos.get(msg.photo);
         if (photo) renderPhoto(msg.photo, photo);
       }
+      if (msg.voice) {
+        optimistic.dataset.voice = msg.voice;
+        const voice = state.voices.get(msg.voice);
+        if (voice) renderVoice(msg.voice, voice);
+      }
 
       renderReactions(snap.key);
       return;
@@ -557,6 +604,15 @@ function watchMessages() {
       } else {
         const bubble = document.querySelector(`.msg[data-photo="${msg.photo}"]`);
         if (bubble) markPhotoGone(bubble);
+      }
+    }
+    if (msg.voice) {
+      const voice = state.voices.get(msg.voice);
+      if (voice) {
+        renderVoice(msg.voice, voice);
+      } else {
+        const bubble = document.querySelector(`.msg[data-voice="${msg.voice}"]`);
+        if (bubble) markVoiceGone(bubble);
       }
     }
     if (!mine && state.booted) beep();
@@ -600,8 +656,12 @@ function appendMessage(msg, mine, pending = false) {
 
   const bubble = document.createElement("div");
   const isPhoto = msg.type === "photo" || msg.photoPending;
+  const isVoice = msg.type === "voice" || msg.voicePending;
   bubble.className = `msg ${mine ? "mine" : "theirs"}${run ? " run-mid" : " run-start"}`
-    + (recalled ? " recalled" : isPhoto ? " photo-msg" : isJumbo(msg.text) ? " jumbo" : "");
+    + (recalled ? " recalled"
+      : isPhoto ? " photo-msg"
+      : isVoice ? " voice-msg"
+      : isJumbo(msg.text) ? " jumbo" : "");
   if (msg.key) bubble.dataset.key = msg.key;
   if (pending && msg.nonce) bubble.dataset.nonce = msg.nonce;
 
@@ -635,6 +695,9 @@ function appendMessage(msg, mine, pending = false) {
     // 先放佔位，圖片本體到了再由 renderPhoto 換掉
     body.textContent = msg.photoPending ? "📷 傳送中…" : "📷 照片載入中…";
     if (msg.photo) bubble.dataset.photo = msg.photo;
+  } else if (msg.type === "voice" || msg.voicePending) {
+    body.textContent = msg.voicePending ? "🎤 傳送中…" : "🎤 語音載入中…";
+    if (msg.voice) bubble.dataset.voice = msg.voice;
   } else {
     body.innerHTML = renderText(msg.text);
   }
@@ -656,7 +719,7 @@ function appendMessage(msg, mine, pending = false) {
   if (msg.key) {
     state.msgs.set(msg.key, {
       text: msg.text, from: msg.from, retracted: msg.retracted ?? null,
-      photo: msg.photo ?? null,
+      photo: msg.photo ?? null, voice: msg.voice ?? null,
     });
     // 收回後的泡泡不掛反應，舊的反應也跟著訊息一起收掉
     if (!recalled) renderReactions(msg.key);
@@ -777,6 +840,157 @@ async function sendPhoto(file) {
   }
 }
 
+/**
+ * 開始錄音。第一次會跳出麥克風權限請求；
+ * 使用者拒絕的話就安靜收手，不再煩他。
+ */
+async function startRecording() {
+  if (state.rec) return;
+  if (quotaBlocked()) {
+    toast(`本月額度已用約 ${Math.round(usageRatio() * 100)}%，暫停傳語音`, "bad");
+    return;
+  }
+
+  const type = pickAudioType();
+  if (!type || !navigator.mediaDevices?.getUserMedia) {
+    toast("這個瀏覽器不支援錄音", "bad");
+    return;
+  }
+
+  let stream;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  } catch (e) {
+    toast(e?.name === "NotAllowedError"
+      ? "沒有麥克風權限，錄不了音" : "打不開麥克風", "bad");
+    return;
+  }
+
+  const chunks = [];
+  const recorder = new MediaRecorder(stream, {
+    mimeType: type,
+    audioBitsPerSecond: VOICE.bitsPerSecond,
+  });
+
+  state.rec = {
+    recorder, stream, chunks, type,
+    startedAt: Date.now(),
+    cancelled: false,
+  };
+
+  recorder.ondataavailable = (e) => { if (e.data.size) chunks.push(e.data); };
+  recorder.onstop = () => finishRecording();
+  recorder.start();
+
+  // 到達上限就自己停下來送出，不會錄出一則沒完沒了的東西
+  state.rec.limitTimer = setTimeout(
+    () => stopRecording(), VOICE.maxSeconds * 1000);
+
+  showRecordingBar();
+}
+
+/** 停止錄音並送出。cancel 為真時錄的東西直接丟掉。 */
+function stopRecording(cancel = false) {
+  const rec = state.rec;
+  if (!rec) return;
+  rec.cancelled = cancel;
+  clearTimeout(rec.limitTimer);
+  clearInterval(rec.tickTimer);
+  if (rec.recorder.state !== "inactive") rec.recorder.stop();
+  else finishRecording();
+}
+
+async function finishRecording() {
+  const rec = state.rec;
+  if (!rec) return;
+  state.rec = null;
+
+  rec.stream.getTracks().forEach((t) => t.stop());   // 關掉麥克風指示燈
+  hideRecordingBar();
+
+  const seconds = (Date.now() - rec.startedAt) / 1000;
+  if (rec.cancelled) return;
+  if (seconds < VOICE.minSeconds) {
+    toast("太短了，沒有送出");
+    return;
+  }
+
+  const blob = new Blob(rec.chunks, { type: rec.type });
+  let dataUrl;
+  try {
+    dataUrl = await blobToDataUrl(blob);
+  } catch {
+    toast("錄音讀不出來", "bad");
+    return;
+  }
+
+  if (dataUrl.length > VOICE.maxBytes) {
+    toast("這則語音太長了", "bad");
+    return;
+  }
+
+  sendVoice(dataUrl, seconds, rec.type);
+}
+
+async function sendVoice(dataUrl, seconds, type) {
+  const nonce = `${state.me.id}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const { bubble, stamp } = appendMessage(
+    { text: "", from: state.me.id, at: Date.now(), nonce, voicePending: true },
+    true, true,
+  );
+
+  try {
+    const voiceRef = push(state.refs.voices);
+    await set(voiceRef, {
+      data: dataUrl,
+      from: state.me.id,
+      at: serverTimestamp(),
+      seconds: Math.round(seconds),
+      type,
+    });
+
+    await set(push(state.refs.messages), {
+      text: "",
+      type: "voice",
+      voice: voiceRef.key,
+      from: state.me.id,
+      at: serverTimestamp(),
+      nonce,
+    });
+
+    chargeUsage(dataUrl.length);
+  } catch (e) {
+    console.error("send voice failed:", e);
+    stamp.innerHTML = '<span class="failed">語音沒送出去</span>';
+    bubble.remove();
+    state.lastAuthor = null;
+  }
+}
+
+/** 錄音中的那條列，顯示秒數並提供停止／取消。 */
+function showRecordingBar() {
+  const bar = $("recording");
+  bar.hidden = false;
+  $("composer").hidden = true;
+
+  const tick = () => {
+    if (!state.rec) return;
+    const sec = (Date.now() - state.rec.startedAt) / 1000;
+    $("rec-time").textContent = fmtDuration(sec);
+    // 快到上限時提醒一下
+    $("rec-time").classList.toggle("is-near",
+      sec > VOICE.maxSeconds - 10);
+  };
+  tick();
+  state.rec.tickTimer = setInterval(tick, 250);
+}
+
+function hideRecordingBar() {
+  $("recording").hidden = true;
+  $("composer").hidden = false;
+  $("rec-time").classList.remove("is-near");
+}
+
 // ------------------------------------------------------------
 //  上線狀態
 // ------------------------------------------------------------
@@ -862,6 +1076,13 @@ function renderDevice() {
   }
   caret.hidden = false;
 
+  // 精準位置：對方同意分享才有。沿用最後一次拿到的，
+  // 定位暫時失敗時不會突然消失。
+  const g = state.peerPresence?.geo ?? state.peerGeo;
+  if (g) state.peerGeo = g;
+  const geo = g ? `${g.lat}, ${g.lon}${g.acc ? `（±${g.acc}m）` : ""}` : "";
+  const geoLink = g ? `https://www.google.com/maps?q=${g.lat},${g.lon}` : "";
+
   const place = [dev.city, dev.region, dev.country]
     .filter(Boolean)
     // region 常和 city 或 country 重複，去掉相鄰重複
@@ -880,14 +1101,81 @@ function renderDevice() {
     ["時區", dev.tz],
     dev.battery != null ? ["電量", `${dev.battery}%${dev.charging ? " ⚡充電中" : ""}`] : null,
     place ? ["大略位置", place] : null,
+    geo ? ["精準位置", geo, false, geoLink] : null,
   ].filter(Boolean);
 
   panel.innerHTML = rows
-    .map(([k, v, guess]) =>
-      `<div class="device-row${guess ? " is-guess" : ""}">` +
-      `<span class="device-k">${k}</span>` +
-      `<span class="device-v">${renderText(String(v))}</span></div>`)
+    .map(([k, v, guess, href]) => {
+      const text = renderText(String(v));
+      // 座標給一個開地圖的連結，比一串數字有用
+      const value = href
+        ? `<a href="${href}" target="_blank" rel="noopener noreferrer">${text}</a>`
+        : text;
+      return `<div class="device-row${guess ? " is-guess" : ""}">` +
+        `<span class="device-k">${k}</span>` +
+        `<span class="device-v">${value}</span></div>`;
+    })
     .join("");
+}
+
+// ------------------------------------------------------------
+//  精準位置
+// ------------------------------------------------------------
+
+const GEO_KEY = "talk.geo";
+
+/**
+ * 問使用者要不要分享精準位置。只問一次，答案記在這台裝置上。
+ *
+ * 拿到座標後寫進 presence 底下的 geo，對方的裝置面板就會多一列。
+ * 一律用 update：定位失敗、暫時沒訊號、或使用者中途關掉權限時，
+ * 都不去動已經寫上去的那筆——保留最後一次的位置，不要洗成空的。
+ */
+async function setupGeo() {
+  if (!navigator.geolocation) return;
+
+  const saved = localStorage.getItem(GEO_KEY);
+  if (saved === "off") return;
+
+  if (saved !== "on") {
+    // 一進門就跳權限請求很惹人厭，先讓畫面安定下來
+    await new Promise((r) => setTimeout(r, GEO.askAfter));
+    const ok = await ask({
+      title: "要分享精準位置嗎？",
+      body: "對方的裝置面板會多一列你的座標，大約到街區的精細度。" +
+        "不分享的話仍然只有 IP 查出來的城市。隨時可以在瀏覽器設定裡關掉。",
+      yes: "分享",
+      no: "不要",
+    });
+    localStorage.setItem(GEO_KEY, ok ? "on" : "off");
+    if (!ok) return;
+  }
+
+  pushGeo();
+  setInterval(pushGeo, GEO.refresh);
+}
+
+/** 取得一次座標並寫上去。拿不到就什麼都不做，舊的留著。 */
+function pushGeo() {
+  navigator.geolocation.getCurrentPosition(
+    (pos) => {
+      const { latitude, longitude, accuracy } = pos.coords;
+      // 只 update geo 這一支，presence 其他欄位不動
+      update(state.refs.myPresence, {
+        geo: {
+          lat: Number(latitude.toFixed(GEO.precision)),
+          lon: Number(longitude.toFixed(GEO.precision)),
+          acc: Math.round(accuracy),
+          at: serverTimestamp(),
+        },
+      }).catch(() => { /* 寫不進去就算了，下次再試 */ });
+    },
+    () => {
+      // 定位失敗（沒訊號、逾時、權限被收回）——
+      // 什麼都不做，上一次的位置就繼續留著。
+    },
+    { enableHighAccuracy: true, timeout: GEO.timeout, maximumAge: 60000 },
+  );
 }
 
 // ------------------------------------------------------------
@@ -974,6 +1262,14 @@ function renderQuota() {
     ? `本月額度已用 ${Math.round(usageRatio() * 100)}%，暫停傳送照片`
     : "傳送照片";
   btn.classList.toggle("is-blocked", blocked);
+
+  const voice = $("voice-btn");
+  if (voice) {
+    voice.disabled = blocked;
+    voice.classList.toggle("is-blocked", blocked);
+  }
+
+  renderUsageBar();
 }
 
 function watchPhotos() {
@@ -1121,6 +1417,8 @@ async function retract(key, mode) {
   if (OPTIONS.confirmRetract) {
     const peek = msg.photo
       ? "這張照片"
+      : msg.voice
+      ? "這則語音"
       : msg.text.length > 40 ? `${msg.text.slice(0, 40)}…` : msg.text;
     const ok = await ask({
       title: `${conf.label}這則訊息？`,
@@ -1142,7 +1440,7 @@ async function retract(key, mode) {
     await set(ref(state.db, `rooms/${ROOM_ID}/retractions/${key}`), {
       text: msg.text,
       from: msg.from,
-      kind: msg.photo ? "photo" : "text",
+      kind: msg.photo ? "photo" : msg.voice ? "voice" : "text",
       mode,
       at: msg.at ?? null,
       retractedAt: serverTimestamp(),
@@ -1165,6 +1463,10 @@ async function retract(key, mode) {
     // 沒有像文字那樣留原文的必要，稽核紀錄裡記下它是一張照片就夠了。
     if (msg.photo) {
       remove(ref(state.db, `rooms/${ROOM_ID}/photos/${msg.photo}`))
+        .catch(() => { /* 過期掃描還是會清掉它 */ });
+    }
+    if (msg.voice) {
+      remove(ref(state.db, `rooms/${ROOM_ID}/voices/${msg.voice}`))
         .catch(() => { /* 過期掃描還是會清掉它 */ });
     }
   } catch (e) {
@@ -1215,6 +1517,137 @@ function applyRetraction(key, msg) {
   }
 }
 
+// ------------------------------------------------------------
+//  語音：同步、播放、過期
+// ------------------------------------------------------------
+
+function watchVoices() {
+  onValue(state.refs.voices, (snap) => {
+    state.voices = new Map(Object.entries(snap.val() || {}));
+    state.voices.forEach((v, id) => renderVoice(id, v));
+
+    document.querySelectorAll(".msg[data-voice]").forEach((bubble) => {
+      if (!state.voices.has(bubble.dataset.voice)) markVoiceGone(bubble);
+    });
+
+    sweepVoices();
+  });
+
+  setInterval(sweepVoices, PHOTO.sweepEvery);
+}
+
+/** 跟照片同樣的規則：聽過的短命，沒人聽的留到上限。 */
+function sweepVoices() {
+  const now = Date.now();
+  state.voices.forEach((v, id) => {
+    if (!v?.at) return;
+    const due = v.heardAt
+      ? v.heardAt + VOICE.keepAfterHeard
+      : v.at + VOICE.keepUnheard;
+    if (now >= due) {
+      remove(ref(state.db, `rooms/${ROOM_ID}/voices/${id}`))
+        .catch(() => { /* 下次掃描再試 */ });
+    }
+  });
+}
+
+/** 聽到一半才算數，點開一秒就關掉不算。自己的不算。 */
+function markHeard(id) {
+  const v = state.voices.get(id);
+  if (!v || v.heardAt) return;
+  if (v.from === state.me.id) return;
+
+  update(ref(state.db, `rooms/${ROOM_ID}/voices/${id}`), {
+    heardAt: serverTimestamp(),
+  }).catch(() => { /* 下次播放再試 */ });
+}
+
+/** 把佔位的泡泡換成播放器。 */
+function renderVoice(id, voice) {
+  const bubble = document.querySelector(`.msg[data-voice="${id}"]`);
+  if (!bubble || bubble.querySelector(".voice")) return;
+
+  const body = bubble.querySelector(".msg-body");
+  if (!body) return;
+
+  const audio = new Audio(voice.data);
+  audio.preload = "metadata";
+
+  const wrap = document.createElement("div");
+  wrap.className = "voice";
+
+  const play = document.createElement("button");
+  play.type = "button";
+  play.className = "voice-play";
+  play.textContent = "▶";
+  play.title = "播放";
+
+  const track = document.createElement("div");
+  track.className = "voice-track";
+  const fill = document.createElement("div");
+  fill.className = "voice-fill";
+  track.appendChild(fill);
+
+  const time = document.createElement("span");
+  time.className = "voice-time";
+  time.textContent = fmtDuration(voice.seconds || 0);
+
+  wrap.append(play, track, time);
+  body.textContent = "";
+  body.appendChild(wrap);
+  bubble.classList.add("has-voice");
+
+  play.onclick = () => {
+    if (audio.paused) {
+      // 同時間只播一則，不然會疊在一起
+      document.querySelectorAll("audio").forEach((a) => {
+        if (a !== audio) a.pause();
+      });
+      audio.play().catch(() => toast("播不出來，格式可能不支援", "bad"));
+    } else {
+      audio.pause();
+    }
+  };
+
+  audio.onplay = () => { play.textContent = "⏸"; play.title = "暫停"; };
+  audio.onpause = () => { play.textContent = "▶"; play.title = "播放"; };
+
+  audio.ontimeupdate = () => {
+    const total = audio.duration || voice.seconds || 0;
+    if (!total) return;
+    const ratio = audio.currentTime / total;
+    fill.style.width = `${Math.min(100, ratio * 100)}%`;
+    time.textContent = fmtDuration(total - audio.currentTime);
+    // 聽過一半才算聽過
+    if (ratio >= VOICE.heardAt) markHeard(id);
+  };
+
+  audio.onended = () => {
+    play.textContent = "▶";
+    fill.style.width = "0%";
+    time.textContent = fmtDuration(voice.seconds || 0);
+    markHeard(id);
+  };
+
+  // 點進度條跳著聽
+  track.onclick = (e) => {
+    const box = track.getBoundingClientRect();
+    const total = audio.duration || voice.seconds || 0;
+    if (!total) return;
+    audio.currentTime = total * ((e.clientX - box.left) / box.width);
+  };
+
+  scrollToEnd();
+}
+
+function markVoiceGone(bubble) {
+  if (!bubble || bubble.classList.contains("voice-gone")) return;
+  bubble.classList.add("voice-gone");
+  bubble.classList.remove("has-voice");
+  const body = bubble.querySelector(".msg-body");
+  if (body) body.textContent = "🎤 語音已過期";
+}
+
 /**
  * 收回紀錄面板。只有走後門（帳號後面加 ...）進場時才存在，
  * 讓你不必開 Firebase 主控台就能即時看到誰收回了什麼。
@@ -1226,7 +1659,7 @@ function watchRetractionLog() {
   $("log-toggle").onclick = () => {
     const panel = $("log-panel");
     panel.hidden = !panel.hidden;
-    if (!panel.hidden) renderRetractionLog();
+    if (!panel.hidden) { renderUsageBar(); renderRetractionLog(); }
   };
 
   onValue(state.refs.retractions, (snap) => {
@@ -1237,6 +1670,34 @@ function watchRetractionLog() {
       .sort((a, b) => (b.retractedAt || 0) - (a.retractedAt || 0));
     renderRetractionLog();
   });
+}
+
+/** 目前用量，畫在收回紀錄面板的最上面。 */
+function renderUsageBar() {
+  const host = $("usage-bar");
+  if (!host) return;
+
+  const pct = Math.min(100, usageRatio() * 100);
+  const GB = 1024 ** 3;
+  const used = (state.usage * QUOTA.overhead) / GB;
+  const total = QUOTA.monthlyBytes / GB;
+  const hot = pct >= QUOTA.stopUploadAt * 100;
+
+  host.innerHTML =
+    `<div class="usage-head">` +
+      `<span>本月用量</span>` +
+      `<span class="usage-month">${usageKey()}</span>` +
+    `</div>` +
+    `<div class="usage-track"><div class="usage-fill${hot ? " is-hot" : ""}" ` +
+      `style="width:${pct.toFixed(1)}%"></div>` +
+      `<div class="usage-mark" style="left:${QUOTA.stopUploadAt * 100}%"></div></div>` +
+    `<div class="usage-foot">` +
+      `<span>${used.toFixed(2)} GB / ${total.toFixed(0)} GB</span>` +
+      `<span class="${hot ? "usage-hot" : ""}">${pct.toFixed(1)}%` +
+        `${hot ? " · 已暫停上傳" : ""}</span>` +
+    `</div>` +
+    `<p class="usage-note">照片與語音的估算值，含 ` +
+      `${Math.round((QUOTA.overhead - 1) * 100)}% 緩衝。每月 1 號歸零。</p>`;
 }
 
 function renderRetractionLog() {
@@ -1258,8 +1719,8 @@ function renderRetractionLog() {
     const mode = r.mode === "remove" ? "刪除" : "收回";
     const when = r.retractedAt
       ? `${dayOf(r.retractedAt)} ${timeOf(r.retractedAt)}` : "";
-    const body = r.kind === "photo"
-      ? "📷 一張照片"
+    const body = r.kind === "photo" ? "📷 一張照片"
+      : r.kind === "voice" ? "🎤 一則語音"
       : (r.text || "（空訊息）");
 
     return `<div class="log-row">` +
@@ -1694,6 +2155,47 @@ function wireComposer() {
       .filter((f) => f.type.startsWith("image/"))
       .forEach(sendPhoto);
   });
+
+  // 錄音：手機習慣按住講話，電腦習慣點一下開始、再點一下結束。
+  // 兩種都支援——按住超過 400ms 當作「按住模式」，放開就送出。
+  const voiceBtn = $("voice-btn");
+  let holdTimer = null;
+  let heldMode = false;
+
+  const beginHold = (e) => {
+    if (voiceBtn.disabled) return;
+    e.preventDefault();
+    holdTimer = setTimeout(() => {
+      heldMode = true;
+      startRecording();
+    }, 400);
+  };
+
+  const endHold = () => {
+    if (holdTimer) {
+      clearTimeout(holdTimer);
+      holdTimer = null;
+      // 沒按滿 400ms：當作點擊，切換錄音狀態
+      if (!heldMode) {
+        if (state.rec) stopRecording();
+        else startRecording();
+      }
+    } else if (heldMode) {
+      heldMode = false;
+      stopRecording();          // 放開就送出
+    }
+  };
+
+  voiceBtn.addEventListener("pointerdown", beginHold);
+  voiceBtn.addEventListener("pointerup", endHold);
+  voiceBtn.addEventListener("pointercancel", () => {
+    clearTimeout(holdTimer);
+    holdTimer = null;
+    if (heldMode) { heldMode = false; stopRecording(true); }
+  });
+
+  $("rec-stop").onclick = () => stopRecording();
+  $("rec-cancel").onclick = () => stopRecording(true);
 
   // 燈箱
   const box = $("lightbox");

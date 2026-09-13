@@ -57,6 +57,7 @@
 
   <!-- 收回紀錄（只有走後門進場時看得到） -->
   <div id="log-panel" class="log-panel" hidden>
+    <div id="usage-bar" class="usage-bar"></div>
     <div class="log-head">
       <strong>收回紀錄</strong>
       <span id="log-count" class="log-count"></span>
@@ -103,12 +104,23 @@
     <div id="emoji-grid" class="emoji-grid" role="group" aria-label="表情符號"></div>
   </div>
 
+  <!-- 錄音中：取代輸入列 -->
+  <div id="recording" class="recording" hidden>
+    <button id="rec-cancel" class="rec-cancel" type="button" title="取消">✕</button>
+    <span class="rec-dot" aria-hidden="true"></span>
+    <span id="rec-time" class="rec-time">0:00</span>
+    <span class="rec-hint">錄音中…</span>
+    <button id="rec-stop" class="rec-stop" type="button" title="送出">➤</button>
+  </div>
+
   <form id="composer" class="composer" autocomplete="off">
     <button id="emoji-btn" type="button" class="emoji-btn"
             title="表情符號" aria-expanded="false">🙂</button>
     <button id="photo-btn" type="button" class="photo-btn"
             title="傳送照片">📷</button>
     <input id="photo-input" type="file" accept="image/*" hidden multiple>
+    <button id="voice-btn" type="button" class="voice-btn"
+            title="按住錄音">🎤</button>
     <textarea id="input" class="composer-input" rows="1"
               placeholder="說點什麼…" maxlength="2000"></textarea>
     <button id="send" type="submit" class="send-btn" title="送出" disabled>➤</button>
