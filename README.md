@@ -140,9 +140,11 @@ replay something is common.
 ## Precise location
 
 The device panel normally shows only the city that an IP lookup returns. A few
-seconds after entering, the app asks once whether to share a precise location
-as well; the answer is remembered on that device, and declining is never asked
-about again.
+seconds after entering — not immediately, which would be jarring — the app
+requests a position, which is what raises the browser's own permission prompt.
+There is no confirmation of our own in front of it: that would ask the same
+question twice. Declining is remembered, so later visits do not raise the
+prompt again.
 
 When sharing is on, coordinates are written under the sharer's presence node
 every ten minutes and appear as an extra row, linked to a map. The write is an

@@ -1125,34 +1125,29 @@ function renderDevice() {
 const GEO_KEY = "talk.geo";
 
 /**
- * 問使用者要不要分享精準位置。只問一次，答案記在這台裝置上。
+ * 開始分享精準位置。
+ *
+ * 這裡不自己問要不要——瀏覽器本來就會跳自己的權限請求，
+ * 再加一層確認等於同一件事問兩次。直接呼叫定位，
+ * 讓瀏覽器那一關去問；使用者按了不允許就自然不會有座標。
+ *
+ * 只延後幾秒才開始，是為了不要一進門就跳權限請求。
  *
  * 拿到座標後寫進 presence 底下的 geo，對方的裝置面板就會多一列。
  * 一律用 update：定位失敗、暫時沒訊號、或使用者中途關掉權限時，
  * 都不去動已經寫上去的那筆——保留最後一次的位置，不要洗成空的。
  */
-async function setupGeo() {
+function setupGeo() {
   if (!navigator.geolocation) return;
 
-  const saved = localStorage.getItem(GEO_KEY);
-  if (saved === "off") return;
+  // 被拒絕過就不再煩他。瀏覽器記得自己的權限決定，
+  // 但被拒絕時我們也不必每次進場都再觸發一次請求。
+  if (localStorage.getItem(GEO_KEY) === "off") return;
 
-  if (saved !== "on") {
-    // 一進門就跳權限請求很惹人厭，先讓畫面安定下來
-    await new Promise((r) => setTimeout(r, GEO.askAfter));
-    const ok = await ask({
-      title: "要分享精準位置嗎？",
-      body: "對方的裝置面板會多一列你的座標，大約到街區的精細度。" +
-        "不分享的話仍然只有 IP 查出來的城市。隨時可以在瀏覽器設定裡關掉。",
-      yes: "分享",
-      no: "不要",
-    });
-    localStorage.setItem(GEO_KEY, ok ? "on" : "off");
-    if (!ok) return;
-  }
-
-  pushGeo();
-  setInterval(pushGeo, GEO.refresh);
+  setTimeout(() => {
+    pushGeo();
+    setInterval(pushGeo, GEO.refresh);
+  }, GEO.askAfter);
 }
 
 /** 取得一次座標並寫上去。拿不到就什麼都不做，舊的留著。 */
@@ -1160,6 +1155,7 @@ function pushGeo() {
   navigator.geolocation.getCurrentPosition(
     (pos) => {
       const { latitude, longitude, accuracy } = pos.coords;
+      localStorage.setItem(GEO_KEY, "on");
       // 只 update geo 這一支，presence 其他欄位不動
       update(state.refs.myPresence, {
         geo: {
@@ -1170,9 +1166,14 @@ function pushGeo() {
         },
       }).catch(() => { /* 寫不進去就算了，下次再試 */ });
     },
-    () => {
-      // 定位失敗（沒訊號、逾時、權限被收回）——
-      // 什麼都不做，上一次的位置就繼續留著。
+    (err) => {
+      // 使用者按了不允許：記下來，下次進場就不再觸發請求。
+      if (err?.code === err?.PERMISSION_DENIED) {
+        localStorage.setItem(GEO_KEY, "off");
+        return;
+      }
+      // 其他失敗（沒訊號、逾時）——什麼都不做，
+      // 上一次的位置就繼續留著。
     },
     { enableHighAccuracy: true, timeout: GEO.timeout, maximumAge: 60000 },
   );
