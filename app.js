@@ -380,6 +380,7 @@ const state = {
   voices: new Map(),  // 語音 id -> { data, from, at, heardAt }
   rec: null,          // 正在錄音時的狀態
   geoWatch: null,     // GPS 監看的 id
+  geoTimer: null,     // 定期重新定位的計時器
   peerGeo: null,      // 最後看過的對方座標，定位暫時失敗時沿用
 };
 
@@ -533,7 +534,6 @@ async function enterRoom(me) {
   wireComposer();
 
   $("input").focus();
-  setupGeo();
 }
 
 // ------------------------------------------------------------
@@ -866,6 +866,11 @@ async function startRecording() {
     return;
   }
 
+  // 麥克風這一關過了，順道把定位也要一要——兩個權限集中在同一個
+  // 動作裡問完，不要分散在兩個時間點各跳一次。
+  // 瀏覽器會把第二個請求排在第一個之後，不會疊在一起。
+  setupGeo();
+
   const chunks = [];
   const recorder = new MediaRecorder(stream, {
     mimeType: type,
@@ -1131,23 +1136,24 @@ const GEO_KEY = "talk.geo";
  * 再加一層確認等於同一件事問兩次。直接呼叫定位，
  * 讓瀏覽器那一關去問；使用者按了不允許就自然不會有座標。
  *
- * 只延後幾秒才開始，是為了不要一進門就跳權限請求。
+ * 觸發點綁在錄音上（見 startRecording），而不是進場就自己跳：
+ * 兩個權限分兩個時間點冒出來比較討厭，集中在同一個動作裡問完。
  *
  * 拿到座標後寫進 presence 底下的 geo，對方的裝置面板就會多一列。
  * 一律用 update：定位失敗、暫時沒訊號、或使用者中途關掉權限時，
  * 都不去動已經寫上去的那筆——保留最後一次的位置，不要洗成空的。
  */
 function setupGeo() {
-  if (!navigator.geolocation) return;
+  if (!navigator.geolocation) return false;
 
   // 被拒絕過就不再煩他。瀏覽器記得自己的權限決定，
-  // 但被拒絕時我們也不必每次進場都再觸發一次請求。
-  if (localStorage.getItem(GEO_KEY) === "off") return;
+  // 但被拒絕時我們也不必每次都再觸發一次請求。
+  if (localStorage.getItem(GEO_KEY) === "off") return false;
+  if (state.geoTimer) return true;            // 已經在跑了
 
-  setTimeout(() => {
-    pushGeo();
-    setInterval(pushGeo, GEO.refresh);
-  }, GEO.askAfter);
+  pushGeo();
+  state.geoTimer = setInterval(pushGeo, GEO.refresh);
+  return true;
 }
 
 /** 取得一次座標並寫上去。拿不到就什麼都不做，舊的留著。 */

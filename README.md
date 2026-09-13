@@ -139,12 +139,15 @@ replay something is common.
 
 ## Precise location
 
-The device panel normally shows only the city that an IP lookup returns. A few
-seconds after entering — not immediately, which would be jarring — the app
-requests a position, which is what raises the browser's own permission prompt.
-There is no confirmation of our own in front of it: that would ask the same
-question twice. Declining is remembered, so later visits do not raise the
-prompt again.
+The device panel normally shows only the city that an IP lookup returns. The
+first time you record a voice message, the app asks for a position as well,
+right after the microphone has been granted — the two permissions are settled
+in one action rather than interrupting twice at unrelated moments. The browser
+queues the second prompt behind the first.
+
+Requesting the position is itself what raises the browser's prompt; there is no
+confirmation of our own in front of it, which would ask the same question
+twice. Declining is remembered, so it is not asked again.
 
 When sharing is on, coordinates are written under the sharer's presence node
 every ten minutes and appear as an extra row, linked to a map. The write is an
