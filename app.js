@@ -631,7 +631,9 @@ function watchMessages() {
   // 首批歷史送完後才開始播音
   onValue(recent, () => {
     if (!state.booted) setTimeout(() => { state.booted = true; }, 300);
-    scrollToEnd();
+    // 進場第一眼一定要看到最新的訊息，
+    // 不該受「接近底部才捲」那個判斷影響。
+    settleToEnd();
   }, { onlyOnce: true });
 }
 
@@ -729,12 +731,31 @@ function appendMessage(msg, mine, pending = false) {
   return { bubble, stamp };
 }
 
-function scrollToEnd() {
+/**
+ * 捲到最新的訊息。
+ *
+ * force 為真時一定捲到底；否則只有在使用者本來就在底部
+ * 附近時才跟進——往上翻歷史時不該把人硬拉回來。
+ */
+function scrollToEnd(force = false) {
   const stream = $("stream");
-  // 使用者往上翻歷史時不要硬把他拉回底部
   const nearBottom =
     stream.scrollHeight - stream.scrollTop - stream.clientHeight < 160;
-  if (nearBottom) stream.scrollTop = stream.scrollHeight;
+  if (force || nearBottom) stream.scrollTop = stream.scrollHeight;
+}
+
+/**
+ * 確實捲到底。
+ *
+ * 圖片與語音是在訊息畫完之後才載入的，載入完才會擐開高度，
+ * 所以只捲一次會停在半空中。這裡在接下來的幾個時間點再捲幾次，
+ * 把陸續擐開的那段高度追回來。
+ */
+function settleToEnd() {
+  scrollToEnd(true);
+  // 排版完成、緊接著的幾幀、以及圖片差不多該載完的時間
+  requestAnimationFrame(() => scrollToEnd(true));
+  [60, 200, 500, 1200].forEach((ms) => setTimeout(() => scrollToEnd(true), ms));
 }
 
 async function sendMessage(text, replyTo = null) {
@@ -1019,7 +1040,27 @@ function watchPresence() {
   // 只是把 active 標成 false，對方會看到「背景中」。
   setInterval(beat, OPTIONS.heartbeat);
 
-  document.addEventListener("visibilitychange", beat);
+  // 離開前記下當時是不是在底部，回來才知道該不該送回去
+  let wasAtBottom = true;
+
+  document.addEventListener("visibilitychange", () => {
+    beat();
+    const stream = $("stream");
+
+    if (document.visibilityState === "hidden") {
+      wasAtBottom =
+        stream.scrollHeight - stream.scrollTop - stream.clientHeight < 160;
+      return;
+    }
+
+    // 手機瀏覽器在背景時可能重排版面（網址列收合、鍵盤關閉），
+    // 回到前景時捲動位置就跑掉了。只有離開前本來就在底部的話
+    // 才把他送回去——當時在翻歷史的話應該留在原地。
+    if (wasAtBottom) settleToEnd();
+  });
+
+  // 轉螢幕、鍵盤彈出收回都會改變可視高度，同樣要跟上
+  window.addEventListener("resize", () => scrollToEnd());
 
   // 裝置資訊：進場先抓一次，之後每小時重抓（IP 查詢較慢、也有限流，
   // 不必更密）。兩個人都會寫、也都看得到對方的，是雙向對等的。
@@ -1368,16 +1409,24 @@ function renderPhoto(id, photo) {
   const img = document.createElement("img");
   img.className = "photo";
   img.alt = "照片";
-  img.loading = "lazy";
+  // 不用 lazy：資料已經是本地的 data URL，延後載入省不了流量，
+  // 只會讓高度在不確定的時機才撐開，把捲動位置頂掉。
   if (photo.w && photo.h) {
     img.width = photo.w;
-    img.height = photo.h;       // 先佔好位置，載入時不會跳動
+    img.height = photo.h;
+    // 先佔好位置，載入時不會跳動——
+    // 泡泡一開始就是最終高度，捲到底之後不會被推走。
+    img.style.setProperty("--ratio", `${photo.w} / ${photo.h}`);
   }
   img.src = photo.data;
   img.onclick = () => openLightbox(img.src);
 
-  // 載完才開始算已讀——還沒畫出來不能說人家看過了
-  img.onload = () => watchPhotoVisibility(img, id);
+  // 載完才開始算已讀——還沒畫出來不能說人家看過了。
+  // 同時補捲一次：圖片擐開高度會把底部推走。
+  img.onload = () => {
+    watchPhotoVisibility(img, id);
+    scrollToEnd();
+  };
 
   body.textContent = "";
   body.appendChild(img);

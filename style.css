@@ -809,7 +809,10 @@ body.pressing .msg {
 .photo {
   display: block;
   width: 100%;
+  /* height:auto 會讓 width/height 屬性推不出比例，圖片載入前高度是 0，
+     載入後才突然撐開——底部就被推走了。改用 aspect-ratio 先佔好位置。 */
   height: auto;
+  aspect-ratio: var(--ratio, 4 / 3);
   max-height: 380px;
   object-fit: cover;
   border-radius: 13px;
