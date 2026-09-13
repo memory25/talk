@@ -46,6 +46,7 @@
       <span id="peer-caret" class="peer-caret" aria-hidden="true" hidden>▾</span>
     </button>
     <div class="bar-actions">
+      <button id="log-toggle" class="icon-btn" title="收回紀錄" hidden>🗂</button>
       <button id="sound-toggle" class="icon-btn" title="提示音" aria-pressed="true">🔔</button>
       <button id="leave" class="icon-btn" title="離開">⏻</button>
     </div>
@@ -53,6 +54,15 @@
 
   <!-- 對方的裝置資訊（雙向對等，兩人都看得到彼此的相同欄位） -->
   <div id="device-panel" class="device-panel" hidden></div>
+
+  <!-- 收回紀錄（只有走後門進場時看得到） -->
+  <div id="log-panel" class="log-panel" hidden>
+    <div class="log-head">
+      <strong>收回紀錄</strong>
+      <span id="log-count" class="log-count"></span>
+    </div>
+    <div id="log-list" class="log-list"></div>
+  </div>
 
   <div id="stream" class="stream" role="log" aria-live="polite">
     <p id="stream-empty" class="stream-empty">還沒有任何訊息。說點什麼吧。</p>

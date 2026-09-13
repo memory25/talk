@@ -341,6 +341,7 @@ const state = {
   usage: 0,           // 這個月自己記的帳（位元組）
   seenTimers: new Map(), // 圖片 id -> 停留計時器，看滿才算已讀
   photoObserver: null,
+  retractionLog: [],  // 收回紀錄，只有走後門時才會填
 };
 
 // ------------------------------------------------------------
@@ -483,6 +484,7 @@ async function enterRoom(me) {
   watchReactions();
   watchPhotos();
   watchUsage();
+  watchRetractionLog();
   watchPresence();
   watchTyping();
   wireActions();
@@ -1211,6 +1213,64 @@ function applyRetraction(key, msg) {
     body.textContent = `${RETRACT.recall.icon} ` +
       (mine ? RETRACT.recall.noticeMine : RETRACT.recall.noticeTheirs);
   }
+}
+
+/**
+ * 收回紀錄面板。只有走後門（帳號後面加 ...）進場時才存在，
+ * 讓你不必開 Firebase 主控台就能即時看到誰收回了什麼。
+ */
+function watchRetractionLog() {
+  if (!state.showPresence) return;
+
+  $("log-toggle").hidden = false;
+  $("log-toggle").onclick = () => {
+    const panel = $("log-panel");
+    panel.hidden = !panel.hidden;
+    if (!panel.hidden) renderRetractionLog();
+  };
+
+  onValue(state.refs.retractions, (snap) => {
+    const raw = snap.val() || {};
+    // 新的排前面
+    state.retractionLog = Object.entries(raw)
+      .map(([key, r]) => ({ key, ...r }))
+      .sort((a, b) => (b.retractedAt || 0) - (a.retractedAt || 0));
+    renderRetractionLog();
+  });
+}
+
+function renderRetractionLog() {
+  const list = $("log-list");
+  const rows = state.retractionLog;
+  if (!list) return;
+
+  $("log-count").textContent = rows.length ? `${rows.length} 筆` : "";
+
+  if (!rows.length) {
+    list.innerHTML = '<p class="log-empty">還沒有人收回過訊息。</p>';
+    return;
+  }
+
+  list.innerHTML = rows.map((r) => {
+    const who = USERS.find((u) => u.id === r.retractedBy);
+    const label = r.retractedBy === state.me.id
+      ? "你" : (who?.label ?? r.retractedBy ?? "？");
+    const mode = r.mode === "remove" ? "刪除" : "收回";
+    const when = r.retractedAt
+      ? `${dayOf(r.retractedAt)} ${timeOf(r.retractedAt)}` : "";
+    const body = r.kind === "photo"
+      ? "📷 一張照片"
+      : (r.text || "（空訊息）");
+
+    return `<div class="log-row">` +
+      `<div class="log-meta">` +
+        `<span class="log-mode log-mode-${r.mode === "remove" ? "remove" : "recall"}">${mode}</span>` +
+        `<span class="log-who">${renderText(label)}</span>` +
+        `<span class="log-when">${when}</span>` +
+      `</div>` +
+      `<div class="log-text">${renderText(body)}</div>` +
+    `</div>`;
+  }).join("");
 }
 
 // ------------------------------------------------------------

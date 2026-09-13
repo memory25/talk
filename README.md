@@ -161,6 +161,12 @@ rooms/<room>/retractions/<key>
   retractedBy  user id
 ```
 
+Entering with `...` after your key (the same suffix that reveals the device
+panel) also adds a 🗂 button to the header, which opens a live list of every
+retraction — who took what back, which way, and when. It reads the same
+`retractions` node, so it is a window onto the audit trail rather than a
+separate record, and it saves a trip to the Firebase console.
+
 The `retractions` node is the one to read when pulling a history together — it
 is a flat log of every retraction, and it does not need the message list to be
 walked to find them. The rules in [database.rules.json](database.rules.json)
