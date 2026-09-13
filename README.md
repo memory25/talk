@@ -15,7 +15,7 @@ No bundler, no `npm install`, no dependencies to keep up to date.
 - Real-time messaging with optimistic rendering and retry on failure
 - Reply to a specific message, with a quoted snapshot of the original
 - Retract your own messages two ways, with the original text kept in the database
-- Send photos that expire five minutes after the other person has actually seen them
+- Send photos that expire an hour after the other person has actually seen them
 - Emoji reactions, plus a quick-pick row and a categorised picker
 - Typing indicator and a sound on incoming messages
 - Message text is escaped before rendering; URLs are linkified
@@ -103,7 +103,7 @@ comes back out as JPEG.
 **Expiry** is driven by whether the photo was actually seen, not by a fixed
 timer from when it was sent:
 
-- Once the other person has genuinely seen it, it is deleted five minutes later.
+- Once the other person has genuinely seen it, it is deleted an hour later.
 - If nobody ever sees it, it is deleted after 24 hours as a backstop.
 - Either way the message stays in the conversation, showing a dim
   "photo expired" line in place of the image.
